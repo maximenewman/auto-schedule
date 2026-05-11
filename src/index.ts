@@ -3,6 +3,7 @@ import { logger } from './logger.js';
 import { StateStore } from './state/store.js';
 import { subjects } from './config/subjects.js';
 import { runGoogleSetup, getAuthorizedClient } from './auth/google.js';
+import { runCourSysSetup } from './auth/coursys.js';
 import { upsertEvent } from './sync/calendar.js';
 import { runPipeline } from './pipeline.js';
 
@@ -54,7 +55,7 @@ async function main(): Promise<void> {
       return;
     }
     case 'setup:coursys': {
-      logger.info('setup:coursys not yet implemented — see Step 6');
+      await runCourSysSetup();
       return;
     }
     case 'test:calendar': {
