@@ -3,9 +3,10 @@ import { logger } from './logger.js';
 import { StateStore } from './state/store.js';
 import { subjects } from './config/subjects.js';
 import { runGoogleSetup, getAuthorizedClient } from './auth/google.js';
-import { runCourSysSetup } from './auth/coursys.js';
+import { runCourSysSetup, CourSysAuthError } from './auth/coursys.js';
 import { upsertEvent } from './sync/calendar.js';
 import { runPipeline } from './pipeline.js';
+import { notifyAuthFailure } from './notify/notifier.js';
 
 type Command =
   | 'run'
@@ -44,7 +45,16 @@ async function main(): Promise<void> {
       const store = new StateStore();
       try {
         const googleAuth = await getAuthorizedClient();
-        await runPipeline(subjects, { googleAuth, store });
+        try {
+          await runPipeline(subjects, { googleAuth, store });
+        } catch (err) {
+          if (err instanceof CourSysAuthError) {
+            await notifyAuthFailure('coursys', googleAuth, err.message);
+            process.exitCode = 2;
+            return;
+          }
+          throw err;
+        }
       } finally {
         store.close();
       }
