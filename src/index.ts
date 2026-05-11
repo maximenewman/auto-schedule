@@ -4,6 +4,7 @@ import { StateStore } from './state/store.js';
 import { subjects } from './config/subjects.js';
 import { runGoogleSetup, getAuthorizedClient } from './auth/google.js';
 import { upsertEvent } from './sync/calendar.js';
+import { runPipeline } from './pipeline.js';
 
 type Command =
   | 'run'
@@ -41,8 +42,8 @@ async function main(): Promise<void> {
     case 'run': {
       const store = new StateStore();
       try {
-        logger.info('pipeline placeholder — wired in later steps');
-        // Pipeline assembly happens once Step 5 lands.
+        const googleAuth = await getAuthorizedClient();
+        await runPipeline(subjects, { googleAuth, store });
       } finally {
         store.close();
       }
