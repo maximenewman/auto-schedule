@@ -36,9 +36,21 @@ function parseCommand(argv: string[]): Command {
   return arg as Command;
 }
 
+async function maybeJitter(command: Command): Promise<void> {
+  if (command !== 'run') return;
+  if (process.env.AUTO_SCHEDULE_NO_JITTER === '1') return;
+  const ms = Math.floor(Math.random() * 60_000);
+  logger.info({ jitterMs: ms }, 'jittering before run');
+  await new Promise((r) => setTimeout(r, ms));
+}
+
 async function main(): Promise<void> {
   const command = parseCommand(process.argv);
-  logger.info({ command, subjectCount: subjects.length }, 'auto-schedule starting');
+  await maybeJitter(command);
+  logger.info(
+    { command, subjectCount: subjects.length, pid: process.pid },
+    'auto-schedule starting',
+  );
 
   switch (command) {
     case 'run': {
@@ -98,7 +110,11 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  logger.error({ err }, 'fatal');
-  process.exit(1);
-});
+main()
+  .then(() => {
+    logger.info({ exitCode: process.exitCode ?? 0 }, 'auto-schedule done');
+  })
+  .catch((err) => {
+    logger.error({ err }, 'fatal');
+    process.exit(1);
+  });
