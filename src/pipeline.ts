@@ -1,10 +1,11 @@
 import type { OAuth2Client } from 'google-auth-library';
 import type { Source, Subject } from './config/subjects.js';
 import type { StateStore } from './state/store.js';
-import { getFetcher } from './sources/factory.js';
+import { FetcherRegistry } from './sources/factory.js';
 import { extractEvents } from './agent/extractor.js';
 import { upsertEvent } from './sync/calendar.js';
 import { logger } from './logger.js';
+import { CourSysAuthError } from './auth/coursys.js';
 
 export interface RunContext {
   googleAuth: OAuth2Client;
@@ -30,21 +31,30 @@ export async function runPipeline(
     eventsUpserted: 0,
     failures: 0,
   };
+  const registry = new FetcherRegistry(ctx);
 
-  for (const subject of subjects) {
-    summary.subjectsProcessed++;
-    const subjectLog = logger.child({ subjectId: subject.id });
-    for (const source of subject.sources) {
-      summary.sourcesProcessed++;
-      try {
-        const events = await processSource(subject, source, ctx);
-        summary.itemsProcessed += events.items;
-        summary.eventsUpserted += events.upserted;
-      } catch (err) {
-        summary.failures++;
-        subjectLog.error({ err, source }, 'source failed');
+  try {
+    for (const subject of subjects) {
+      summary.subjectsProcessed++;
+      const subjectLog = logger.child({ subjectId: subject.id });
+      for (const source of subject.sources) {
+        summary.sourcesProcessed++;
+        try {
+          const events = await processSource(subject, source, registry, ctx);
+          summary.itemsProcessed += events.items;
+          summary.eventsUpserted += events.upserted;
+        } catch (err) {
+          summary.failures++;
+          if (err instanceof CourSysAuthError) {
+            subjectLog.error({ err: err.message, source }, 'coursys auth failed — bailing out');
+            throw err;
+          }
+          subjectLog.error({ err, source }, 'source failed');
+        }
       }
     }
+  } finally {
+    await registry.close();
   }
 
   logger.info(summary, 'pipeline finished');
@@ -54,9 +64,10 @@ export async function runPipeline(
 async function processSource(
   subject: Subject,
   source: Source,
+  registry: FetcherRegistry,
   ctx: RunContext,
 ): Promise<{ items: number; upserted: number }> {
-  const fetcher = getFetcher(source, ctx);
+  const fetcher = registry.get(source);
   const items = await fetcher.fetchNew(subject, source);
   let upserted = 0;
 
