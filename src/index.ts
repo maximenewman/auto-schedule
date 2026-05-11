@@ -2,10 +2,21 @@ import 'dotenv/config';
 import { logger } from './logger.js';
 import { StateStore } from './state/store.js';
 import { subjects } from './config/subjects.js';
+import { runGoogleSetup, getAuthorizedClient } from './auth/google.js';
+import { upsertEvent } from './sync/calendar.js';
 
-type Command = 'run' | 'setup:google' | 'setup:coursys';
+type Command =
+  | 'run'
+  | 'setup:google'
+  | 'setup:coursys'
+  | 'test:calendar';
 
-const COMMANDS: readonly Command[] = ['run', 'setup:google', 'setup:coursys'];
+const COMMANDS: readonly Command[] = [
+  'run',
+  'setup:google',
+  'setup:coursys',
+  'test:calendar',
+];
 
 function parseCommand(argv: string[]): Command {
   const arg = argv[2];
@@ -38,11 +49,38 @@ async function main(): Promise<void> {
       return;
     }
     case 'setup:google': {
-      logger.info('setup:google not yet implemented — see Step 2');
+      await runGoogleSetup();
       return;
     }
     case 'setup:coursys': {
       logger.info('setup:coursys not yet implemented — see Step 6');
+      return;
+    }
+    case 'test:calendar': {
+      const store = new StateStore();
+      try {
+        const auth = await getAuthorizedClient();
+        const now = new Date();
+        const start = new Date(now.getTime() + 60 * 60 * 1000);
+        const end = new Date(start.getTime() + 30 * 60 * 1000);
+        const result = await upsertEvent(
+          auth,
+          'test',
+          {
+            itemId: 'sanity-check',
+            summary: 'auto-schedule: sanity check',
+            description:
+              'Created by `npm run dev test:calendar`. Safe to delete. Re-running should update, not duplicate.',
+            startDateTime: start.toISOString(),
+            endDateTime: end.toISOString(),
+            attachments: [],
+          },
+          store,
+        );
+        logger.info({ result }, 'test:calendar finished');
+      } finally {
+        store.close();
+      }
       return;
     }
   }
