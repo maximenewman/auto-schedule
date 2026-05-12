@@ -12,6 +12,8 @@
     "start": "node dist/index.js",
     "run": "node dist/index.js run",
     "dev": "tsx src/index.ts run",
+    "serve": "node dist/server/index.js",
+    "serve:dev": "tsx src/server/index.ts",
     "setup:google": "tsx src/index.ts setup:google",
     "setup:coursys": "tsx src/index.ts setup:coursys",
     "typecheck": "tsc -p tsconfig.json --noEmit"
