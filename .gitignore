@@ -18,3 +18,7 @@ logs/
 # os
 .DS_Store
 Thumbs.db
+
+#design
+
+desing/

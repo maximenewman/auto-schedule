@@ -92,9 +92,11 @@ async function main(): Promise<void> {
           'test',
           {
             itemId: 'sanity-check',
+            kind: 'other',
             summary: 'auto-schedule: sanity check',
             description:
               'Created by `npm run dev test:calendar`. Safe to delete. Re-running should update, not duplicate.',
+            room: null,
             startDateTime: start.toISOString(),
             endDateTime: end.toISOString(),
             attachments: [],

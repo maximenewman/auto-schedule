@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import type { CalendarEvent, EventKind } from '../agent/schema.js';
 
 export interface SeenEmailRow {
   subjectId: string;
@@ -25,6 +26,21 @@ export interface SyncedEventRow {
   eventId: string;
   subjectId: string;
   itemId: string;
+  lastSyncedAt: string;
+}
+
+export interface CalendarItemRow {
+  eventId: string;
+  subjectId: string;
+  itemId: string;
+  kind: EventKind;
+  summary: string;
+  description: string;
+  startISO: string;
+  endISO: string;
+  room: string | null;
+  attachments: { url: string; filename: string }[];
+  sourceLabel: string | null;
   lastSyncedAt: string;
 }
 
@@ -69,6 +85,26 @@ export class StateStore {
         item_id TEXT NOT NULL,
         last_synced_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS calendar_items (
+        event_id         TEXT PRIMARY KEY,
+        subject_id       TEXT NOT NULL,
+        item_id          TEXT NOT NULL,
+        kind             TEXT NOT NULL,
+        summary          TEXT NOT NULL,
+        description      TEXT NOT NULL DEFAULT '',
+        start_iso        TEXT NOT NULL,
+        end_iso          TEXT NOT NULL,
+        room             TEXT,
+        attachments_json TEXT NOT NULL DEFAULT '[]',
+        source_label     TEXT,
+        last_synced_at   TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_calendar_items_subject_start
+        ON calendar_items(subject_id, start_iso);
+      CREATE INDEX IF NOT EXISTS idx_calendar_items_start
+        ON calendar_items(start_iso);
     `);
   }
 

@@ -44,6 +44,7 @@ function toCalendarResource(event: CalendarEvent): calendar_v3.Schema$Event {
   return {
     summary: event.summary,
     description: descriptionParts.join('\n'),
+    location: event.room ?? undefined,
     start: { dateTime: event.startDateTime, timeZone: TIME_ZONE },
     end: { dateTime: event.endDateTime, timeZone: TIME_ZONE },
   };
