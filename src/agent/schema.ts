@@ -13,7 +13,9 @@ export const CalendarEventSchema = z.object({
   description: z.string(),
   startDateTime: z.string().describe('RFC3339 in America/Vancouver'),
   endDateTime: z.string(),
-  attachments: z.array(AttachmentSchema).default([]),
+  attachments: z
+    .array(AttachmentSchema)
+    .describe('Attachments referenced by this event. Emit [] if none.'),
 });
 
 export const CalendarEventListSchema = z.object({

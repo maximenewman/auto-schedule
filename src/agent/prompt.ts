@@ -21,5 +21,7 @@ Hard rules:
    from the source (where to submit, weighting, etc.).
 6. If the source links to attachments (PDF handouts, lecture slides), copy them
    into the attachments array with absolute URLs and best-guess filenames.
+   The attachments array is REQUIRED on every event — emit [] when there are
+   no attachments rather than omitting the field.
 
 You will be given the subject name, professor, source type, and the raw content.`;

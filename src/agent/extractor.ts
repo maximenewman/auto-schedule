@@ -1,4 +1,4 @@
-import { generateObject, NoObjectGeneratedError } from 'ai';
+import { generateObject, NoObjectGeneratedError, APICallError } from 'ai';
 import { createOpenAI, type OpenAIProvider } from '@ai-sdk/openai';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -39,7 +39,10 @@ export async function extractEvents(
       model: getProvider()(DEFAULT_MODEL),
       schema: CalendarEventListSchema,
       temperature: 0.2,
-      maxTokens: 400,
+      // 400 truncated mid-JSON on full course pages (~8+ events). 2000 fits
+      // even verbose syllabi with room to spare and is still ~$0.0012 per
+      // call on gpt-4o-mini.
+      maxTokens: 2000,
       system: SYSTEM_PROMPT,
       prompt: [
         `Subject: ${subject.name}`,
@@ -58,6 +61,38 @@ export async function extractEvents(
   }
 }
 
+function describeError(err: unknown): Record<string, unknown> {
+  if (APICallError.isInstance(err)) {
+    return {
+      kind: 'APICallError',
+      message: err.message,
+      statusCode: err.statusCode,
+      url: err.url,
+      responseBody: err.responseBody,
+      responseHeaders: err.responseHeaders,
+      isRetryable: err.isRetryable,
+      data: err.data,
+    };
+  }
+  if (NoObjectGeneratedError.isInstance(err)) {
+    return {
+      kind: 'NoObjectGeneratedError',
+      message: err.message,
+      text: err.text,
+      cause: err.cause instanceof Error ? err.cause.message : String(err.cause ?? ''),
+    };
+  }
+  if (err instanceof Error) {
+    return {
+      kind: err.name,
+      message: err.message,
+      stack: err.stack,
+      cause: err.cause instanceof Error ? err.cause.message : err.cause,
+    };
+  }
+  return { kind: 'unknown', value: String(err) };
+}
+
 function logRawFailure(
   subject: Subject,
   source: Source,
@@ -73,7 +108,7 @@ function logRawFailure(
     ERROR_DIR,
     `${stamp}__${subject.id}__${safeSlug}.json`,
   );
-  const message = err instanceof Error ? err.message : String(err);
+  const details = describeError(err);
   writeFileSync(
     file,
     JSON.stringify(
@@ -81,7 +116,7 @@ function logRawFailure(
         when: new Date().toISOString(),
         subjectId: subject.id,
         source,
-        error: message,
+        error: details,
         rawModelOutput: raw,
         inputContent: content,
       },
@@ -89,5 +124,8 @@ function logRawFailure(
       2,
     ),
   );
-  logger.error({ file, subjectId: subject.id }, 'agent extraction failed; raw output logged');
+  logger.error(
+    { file, subjectId: subject.id, errorKind: details.kind, statusCode: details.statusCode },
+    'agent extraction failed; raw output logged',
+  );
 }
