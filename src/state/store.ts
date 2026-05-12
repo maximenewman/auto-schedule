@@ -173,7 +173,117 @@ export class StateStore {
       .run(eventId, subjectId, itemId, new Date().toISOString());
   }
 
+  upsertCalendarItem(
+    eventId: string,
+    subjectId: string,
+    event: CalendarEvent,
+    sourceLabel: string | null,
+  ): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO calendar_items
+          (event_id, subject_id, item_id, kind, summary, description,
+           start_iso, end_iso, room, attachments_json, source_label, last_synced_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        eventId,
+        subjectId,
+        event.itemId,
+        event.kind,
+        event.summary,
+        event.description,
+        event.startDateTime,
+        event.endDateTime,
+        event.room,
+        JSON.stringify(event.attachments),
+        sourceLabel,
+        new Date().toISOString(),
+      );
+  }
+
+  listCalendarItems(opts: {
+    subjectId?: string;
+    fromISO?: string;
+    toISO?: string;
+  } = {}): CalendarItemRow[] {
+    const where: string[] = [];
+    const args: (string | undefined)[] = [];
+    if (opts.subjectId) { where.push('subject_id = ?'); args.push(opts.subjectId); }
+    if (opts.fromISO)   { where.push('start_iso >= ?'); args.push(opts.fromISO); }
+    if (opts.toISO)     { where.push('start_iso < ?');  args.push(opts.toISO); }
+    const sql = `
+      SELECT
+        event_id      AS eventId,
+        subject_id    AS subjectId,
+        item_id       AS itemId,
+        kind          AS kind,
+        summary       AS summary,
+        description   AS description,
+        start_iso     AS startISO,
+        end_iso       AS endISO,
+        room          AS room,
+        attachments_json AS attachmentsJson,
+        source_label  AS sourceLabel,
+        last_synced_at AS lastSyncedAt
+      FROM calendar_items
+      ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+      ORDER BY start_iso ASC
+    `;
+    const rows = this.db.prepare(sql).all(...args) as Array<
+      Omit<CalendarItemRow, 'attachments'> & { attachmentsJson: string }
+    >;
+    return rows.map((r) => ({
+      eventId: r.eventId,
+      subjectId: r.subjectId,
+      itemId: r.itemId,
+      kind: r.kind,
+      summary: r.summary,
+      description: r.description,
+      startISO: r.startISO,
+      endISO: r.endISO,
+      room: r.room,
+      attachments: safeParseAttachments(r.attachmentsJson),
+      sourceLabel: r.sourceLabel,
+      lastSyncedAt: r.lastSyncedAt,
+    }));
+  }
+
+  listDownloadedFilesByPathPrefix(prefix: string): DownloadedFileRow[] {
+    const rows = this.db
+      .prepare(
+        `SELECT
+            file_hash      AS fileHash,
+            path           AS path,
+            downloaded_at  AS downloadedAt
+          FROM downloaded_files
+          WHERE path LIKE ?
+          ORDER BY downloaded_at DESC`,
+      )
+      .all(`${prefix}%`) as DownloadedFileRow[];
+    return rows;
+  }
+
+  /** For the UI status block. */
+  countAgentErrorsBetween(_fromISO: string, _toISO: string): number {
+    // The pipeline writes agent errors to disk, not to SQLite. Returning 0
+    // here is a stub the routes layer can override by counting files.
+    return 0;
+  }
+
   close(): void {
     this.db.close();
+  }
+}
+
+function safeParseAttachments(json: string): { url: string; filename: string }[] {
+  try {
+    const parsed = JSON.parse(json);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (a) => a && typeof a.url === 'string' && typeof a.filename === 'string',
+    );
+  } catch {
+    return [];
   }
 }

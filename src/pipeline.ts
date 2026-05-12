@@ -111,7 +111,13 @@ async function processSource(
 
     for (const event of extracted.events) {
       try {
-        await upsertEvent(ctx.googleAuth, subject.id, event, ctx.store);
+        await upsertEvent(
+          ctx.googleAuth,
+          subject.id,
+          event,
+          ctx.store,
+          describeSource(source),
+        );
         upserted++;
       } catch (err) {
         log.error({ err, itemId: event.itemId }, 'calendar upsert failed');
