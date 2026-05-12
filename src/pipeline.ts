@@ -38,19 +38,32 @@ export async function runPipeline(
     for (const subject of subjects) {
       summary.subjectsProcessed++;
       const subjectLog = logger.child({ subjectId: subject.id });
+      subjectLog.info(
+        { name: subject.name, sources: subject.sources.length },
+        `→ subject ${subject.name}`,
+      );
       for (const source of subject.sources) {
         summary.sourcesProcessed++;
+        const label = describeSource(source);
+        subjectLog.info({ source: label }, `  → source ${label}`);
         try {
           const events = await processSource(subject, source, registry, ctx);
           summary.itemsProcessed += events.items;
           summary.eventsUpserted += events.upserted;
+          subjectLog.info(
+            { source: label, items: events.items, upserted: events.upserted },
+            `    ✓ source done`,
+          );
         } catch (err) {
           summary.failures++;
           if (err instanceof CourSysAuthError) {
-            subjectLog.error({ err: err.message, source }, 'coursys auth failed — bailing out');
+            subjectLog.error(
+              { err: err.message, source: label },
+              'coursys auth failed — bailing out',
+            );
             throw err;
           }
-          subjectLog.error({ err, source }, 'source failed');
+          subjectLog.error({ err, source: label }, '    ✗ source failed');
         }
       }
     }
@@ -70,6 +83,12 @@ async function processSource(
 ): Promise<{ items: number; upserted: number }> {
   const fetcher = registry.get(source);
   const items = await fetcher.fetchNew(subject, source);
+  if (items.length === 0) {
+    logger.info(
+      { subjectId: subject.id, source: describeSource(source) },
+      '    (no new items — skipping agent)',
+    );
+  }
   let upserted = 0;
 
   for (const item of items) {
@@ -79,15 +98,16 @@ async function processSource(
       sourceItemId: item.sourceItemId,
     });
 
+    log.info(
+      { contentChars: item.content.length, attachments: item.attachments.length },
+      '      → asking agent to extract events',
+    );
     const extracted = await extractEvents(subject, source, item.content);
     if (!extracted) {
-      log.warn('agent returned no object; skipping item (raw output logged)');
+      log.warn('      ✗ agent returned no object; skipping item (raw output logged)');
       continue;
     }
-
-    if (extracted.events.length === 0) {
-      log.info('agent emitted no events for this item');
-    }
+    log.info({ events: extracted.events.length }, '      ← agent emitted events');
 
     for (const event of extracted.events) {
       try {
@@ -119,4 +139,8 @@ async function processSource(
   }
 
   return { items: items.length, upserted };
+}
+
+function describeSource(source: Source): string {
+  return source.type === 'email' ? `email:${source.label}` : `site:${source.url}`;
 }

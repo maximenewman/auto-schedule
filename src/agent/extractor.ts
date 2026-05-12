@@ -34,8 +34,9 @@ export async function extractEvents(
   source: Source,
   content: string,
 ): Promise<CalendarEventList | null> {
+  const start = Date.now();
   try {
-    const { object } = await generateObject({
+    const result = await generateObject({
       model: getProvider()(DEFAULT_MODEL),
       schema: CalendarEventListSchema,
       temperature: 0.2,
@@ -53,7 +54,18 @@ export async function extractEvents(
         content,
       ].join('\n'),
     });
-    return object;
+    logger.info(
+      {
+        subjectId: subject.id,
+        model: DEFAULT_MODEL,
+        ms: Date.now() - start,
+        promptTokens: result.usage?.promptTokens,
+        completionTokens: result.usage?.completionTokens,
+        events: result.object.events.length,
+      },
+      'agent: extracted',
+    );
+    return result.object;
   } catch (err) {
     const raw = NoObjectGeneratedError.isInstance(err) ? err.text : undefined;
     logRawFailure(subject, source, content, err, raw);

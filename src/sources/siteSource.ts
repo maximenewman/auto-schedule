@@ -50,8 +50,10 @@ export class SiteSource implements SourceFetcher {
     try {
       const cookies = loadCookies();
       await attachCookies(page, cookies);
+      logger.info({ subjectId: subject.id, url: source.url }, 'site: validating session');
       await validateSession(page);
 
+      logger.info({ subjectId: subject.id, url: source.url }, 'site: navigating');
       await page.goto(source.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
       // Detect a mid-session redirect to CAS too.
       const landing = new URL(page.url());
@@ -62,10 +64,20 @@ export class SiteSource implements SourceFetcher {
       const scraped = await scrapePage(page, source.url);
       const hash = sha256(scraped.text);
       const prior = this.store.getSiteHash(subject.id, source.url);
+      logger.info(
+        {
+          subjectId: subject.id,
+          url: source.url,
+          chars: scraped.text.length,
+          attachments: scraped.attachments.length,
+          hash: hash.slice(0, 12),
+        },
+        'site: scraped',
+      );
       if (prior === hash) {
-        logger.debug(
-          { subjectId: subject.id, url: source.url, hash },
-          'site content unchanged; skipping agent',
+        logger.info(
+          { subjectId: subject.id, url: source.url },
+          'site: content unchanged — skipping agent',
         );
         return [];
       }

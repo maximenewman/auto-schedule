@@ -22,24 +22,32 @@ export class EmailSource implements SourceFetcher {
       throw new Error(`EmailSource called with non-email source: ${source.type}`);
     }
     const q = `label:${source.label}`;
+    logger.info(
+      { subjectId: subject.id, label: source.label },
+      'email: querying gmail by label',
+    );
     const list = await this.gmail.users.messages.list({
       userId: 'me',
       q,
       maxResults: MAX_MESSAGES_PER_RUN,
     });
-    const messageIds = (list.data.messages ?? [])
+    const allIds = (list.data.messages ?? [])
       .map((m) => m.id)
-      .filter((id): id is string => typeof id === 'string')
-      .filter((id) => !this.store.hasSeenEmail(subject.id, id));
-
+      .filter((id): id is string => typeof id === 'string');
+    const messageIds = allIds.filter((id) => !this.store.hasSeenEmail(subject.id, id));
+    logger.info(
+      {
+        subjectId: subject.id,
+        label: source.label,
+        scanned: allIds.length,
+        alreadySeen: allIds.length - messageIds.length,
+        newToProcess: messageIds.length,
+      },
+      'email: scan complete',
+    );
     if (messageIds.length === 0) {
-      logger.debug({ subjectId: subject.id, label: source.label }, 'no new emails');
       return [];
     }
-    logger.info(
-      { subjectId: subject.id, label: source.label, count: messageIds.length },
-      'fetched email candidates',
-    );
 
     const items: SourceItem[] = [];
     for (const id of messageIds) {
