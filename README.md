@@ -138,12 +138,32 @@ Unregister-ScheduledTask -TaskName auto-schedule -Confirm:$false
 0 8,20 * * * /absolute/path/to/auto-schedule/run.sh
 ```
 
+## Web UI
+
+A local dashboard reads the same SQLite state the pipeline writes:
+
+```powershell
+npm run serve        # production build
+npm run serve:dev    # tsx, no build step needed
+```
+
+Open http://127.0.0.1:5174 — Schedule (week grid + today timeline + upcoming
+deadlines) and Subjects (index + per-subject detail with files, sources,
+pipeline status) views. Bound to 127.0.0.1 only; no auth. The "Sync now"
+button spawns a one-shot run of the pipeline as a subprocess.
+
+The UI reads from `calendar_items` (populated whenever the pipeline upserts
+a calendar event). On a fresh install that table is empty until the first
+`npm run run` finishes.
+
 ## CLI verbs
 
 | Command | What it does |
 |---|---|
 | `npm run run` | One sync pass over every subject |
 | `npm run dev` | Same, via `tsx` (no build step) |
+| `npm run serve` | Local web UI on http://127.0.0.1:5174 |
+| `npm run serve:dev` | UI via `tsx` |
 | `npm run build` | TypeScript → `dist/` |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run setup:google` | One-time browser OAuth flow |
