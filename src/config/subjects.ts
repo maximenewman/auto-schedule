@@ -9,7 +9,7 @@ export interface Subject {
   /** Full course name, e.g. "Data Structures and Algorithms". */
   name: string;
   professor: string;
-  /** Default lecture room — falls back when an event doesn't specify one. */
+  /** Default lecture room  -  falls back when an event doesn't specify one. */
   room?: string;
   /** Term label, e.g. "Summer 2026". */
   term?: string;
@@ -40,7 +40,7 @@ export function colorForSubject(subject: Subject): string {
 }
 
 export const subjects: Subject[] = [
-  // Example — replace with real subjects before running.
+  // Example  -  replace with real subjects before running.
   // {
   //   id: 'cmpt307',
   //   name: 'CMPT 307',

@@ -112,8 +112,21 @@ export class StateStore {
         value      TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+
+      -- After the dedup agent merges two events that came from different
+      -- sources (PDF + iCal), the loser's source (subject_id, item_id) is
+      -- recorded here pointing at the winner's Google event id. Future
+      -- syncs see the redirect and fill into the canonical event instead
+      -- of materialising the duplicate again.
+      CREATE TABLE IF NOT EXISTS event_redirects (
+        subject_id      TEXT NOT NULL,
+        item_id         TEXT NOT NULL,
+        target_event_id TEXT NOT NULL,
+        created_at      TEXT NOT NULL,
+        PRIMARY KEY (subject_id, item_id)
+      );
     `);
-    // Idempotent column add — `ALTER TABLE ADD COLUMN` errors if the column
+    // Idempotent column add  -  `ALTER TABLE ADD COLUMN` errors if the column
     // already exists, so check first.
     const cols = this.db
       .prepare("PRAGMA table_info(calendar_items)")
@@ -292,6 +305,13 @@ export class StateStore {
     return rows;
   }
 
+  deleteCalendarItemByEventId(eventId: string): number {
+    const info = this.db
+      .prepare('DELETE FROM calendar_items WHERE event_id = ?')
+      .run(eventId);
+    return Number(info.changes ?? 0);
+  }
+
   deleteCalendarItemsForSubject(subjectId: string): number {
     const info = this.db
       .prepare('DELETE FROM calendar_items WHERE subject_id = ?')
@@ -304,6 +324,27 @@ export class StateStore {
       .prepare('DELETE FROM synced_events WHERE subject_id = ?')
       .run(subjectId);
     return Number(info.changes ?? 0);
+  }
+
+  getEventRedirect(subjectId: string, itemId: string): string | null {
+    const row = this.db
+      .prepare(
+        'SELECT target_event_id AS target FROM event_redirects WHERE subject_id = ? AND item_id = ?',
+      )
+      .get(subjectId, itemId) as { target: string } | undefined;
+    return row?.target ?? null;
+  }
+
+  setEventRedirect(subjectId: string, itemId: string, targetEventId: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO event_redirects (subject_id, item_id, target_event_id, created_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(subject_id, item_id) DO UPDATE SET
+           target_event_id = excluded.target_event_id,
+           created_at = excluded.created_at`,
+      )
+      .run(subjectId, itemId, targetEventId, new Date().toISOString());
   }
 
   getSetting(key: string): string | null {

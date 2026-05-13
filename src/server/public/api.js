@@ -85,14 +85,14 @@ window.bootData = async function bootData() {
   window.EVENTS = events.map(hydrateEvent);
   window.SYNC_STATUS = status;
 
-  // Files per subject — fan out, but only after we know the subject IDs.
+  // Files per subject  -  fan out, but only after we know the subject IDs.
   const filesEntries = await Promise.all(
     subjects.map(async (s) => [s.id, (await api.files(s.id)).map(hydrateFile)]),
   );
   window.SUBJECT_FILES = Object.fromEntries(filesEntries);
 };
 
-/** Refresh just the volatile bits — events + status. */
+/** Refresh just the volatile bits  -  events + status. */
 window.refreshData = async function refreshData() {
   const [events, status] = await Promise.all([api.events(), api.status()]);
   window.EVENTS = events.map(hydrateEvent);

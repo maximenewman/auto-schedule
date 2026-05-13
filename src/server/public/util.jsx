@@ -26,7 +26,7 @@ const Util = {
     const bS = sameMonth
       ? b.toLocaleDateString('en-US', { day: 'numeric' })
       : b.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-    return `${aS} – ${bS}, ${b.getFullYear()}`;
+    return `${aS} - ${bS}, ${b.getFullYear()}`;
   },
   startOfWeek(d) {
     // Monday-start

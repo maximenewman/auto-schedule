@@ -24,7 +24,7 @@ interface StoredToken {
 function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value) {
-    throw new Error(`missing env var ${name} — copy .env.example to .env and fill it in`);
+    throw new Error(`missing env var ${name}  -  copy .env.example to .env and fill it in`);
   }
   return value;
 }
@@ -54,7 +54,7 @@ function saveToken(refreshToken: string, scope: string | undefined): void {
 function loadToken(): StoredToken {
   if (!existsSync(TOKEN_PATH)) {
     throw new Error(
-      `no Google token at ${TOKEN_PATH} — run \`npm run setup:google\` first`,
+      `no Google token at ${TOKEN_PATH}  -  run \`npm run setup:google\` first`,
     );
   }
   const raw = readFileSync(TOKEN_PATH, 'utf8');
@@ -130,7 +130,7 @@ export async function runGoogleSetup(): Promise<void> {
   const { tokens } = await client.getToken(code);
   if (!tokens.refresh_token) {
     throw new Error(
-      'no refresh_token returned — revoke prior consent at https://myaccount.google.com/permissions and retry',
+      'no refresh_token returned  -  revoke prior consent at https://myaccount.google.com/permissions and retry',
     );
   }
   saveToken(tokens.refresh_token, tokens.scope ?? undefined);

@@ -8,7 +8,7 @@ function statusPills() {
   const googleLabel = s.googleAuthOk ? 'Google OK' : 'Google re-auth needed';
   let coursysLabel;
   if (!s.coursysAuthOk) coursysLabel = 'CourSys expired';
-  else if (s.coursysExpiresInDays != null) coursysLabel = `CourSys · expires in ${s.coursysExpiresInDays}d`;
+  else if (s.coursysExpiresInDays != null) coursysLabel = `CourSys  -  expires in ${s.coursysExpiresInDays}d`;
   else coursysLabel = 'CourSys OK';
   return (
     <div style={{ display: 'flex', gap: 10 }}>
@@ -99,7 +99,7 @@ function SubjectForm({ initial, mode, onCancel, onSaved }) {
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         const msg = body.issues
-          ? body.issues.map((i) => `${i.path}: ${i.message}`).join(' · ')
+          ? body.issues.map((i) => `${i.path}: ${i.message}`).join('  -  ')
           : (body.error || `HTTP ${res.status}`);
         throw new Error(msg);
       }
@@ -118,7 +118,7 @@ function SubjectForm({ initial, mode, onCancel, onSaved }) {
         <form onSubmit={submit} className="subject-form">
           <header>
             <h2>{isEdit ? `Edit ${form.code || form.id}` : 'Add subject'}</h2>
-            <button type="button" className="close" onClick={onCancel} aria-label="Close">✕</button>
+            <button type="button" className="close" onClick={onCancel} aria-label="Close">x</button>
           </header>
 
           <div className="grid-2">
@@ -231,12 +231,12 @@ function SubjectForm({ initial, mode, onCancel, onSaved }) {
                 ) : (
                   <input
                     type="url"
-                    placeholder="https://coursys.sfu.ca/…/pages/"
+                    placeholder="https://coursys.sfu.ca/.../pages/"
                     value={src.url || ''}
                     onChange={(e) => updateSource(i, { url: e.target.value })}
                   />
                 )}
-                <button type="button" className="btn-icon" onClick={() => removeSource(i)} aria-label="Remove source">−</button>
+                <button type="button" className="btn-icon" onClick={() => removeSource(i)} aria-label="Remove source">-</button>
               </div>
             ))}
             <div className="source-add">
@@ -249,7 +249,7 @@ function SubjectForm({ initial, mode, onCancel, onSaved }) {
           <footer>
             <button type="button" className="btn-ghost-pill" onClick={onCancel} disabled={busy}>Cancel</button>
             <button type="submit" className="btn-primary" disabled={busy}>
-              {busy ? 'Saving…' : isEdit ? 'Save changes' : 'Add subject'}
+              {busy ? 'Saving...' : isEdit ? 'Save changes' : 'Add subject'}
             </button>
           </footer>
         </form>
@@ -260,23 +260,24 @@ function SubjectForm({ initial, mode, onCancel, onSaved }) {
 
 // Synthetic buckets the iCal sync creates that shouldn't appear as a
 // regular subject card (events tagged with this id still render in the
-// schedule view — Util.subjectById still finds them in window.SUBJECTS).
+// schedule view  -  Util.subjectById still finds them in window.SUBJECTS).
 const HIDDEN_SUBJECT_IDS = new Set(['holidays']);
 
 function DedupButton() {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [suggestions, setSuggestions] = useState([]);
-  const [selected, setSelected] = useState({});
-  const [deleteGoogle, setDeleteGoogle] = useState(true);
+  const [plan, setPlan] = useState(null); // { subjectMerges, eventMerges }
+  const [subjectChecks, setSubjectChecks] = useState({});
+  const [eventChecks, setEventChecks] = useState({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
 
   const close = () => {
     setOpen(false);
-    setSuggestions([]);
-    setSelected({});
+    setPlan(null);
+    setSubjectChecks({});
+    setEventChecks({});
     setError(null);
     setResult(null);
   };
@@ -286,14 +287,18 @@ function DedupButton() {
     setLoading(true);
     setError(null);
     setResult(null);
+    setPlan(null);
     try {
       const res = await fetch('/api/subjects/dedup');
       const body = await res.json();
       if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
-      setSuggestions(body.suggestions || []);
-      const init = {};
-      for (const s of body.suggestions || []) init[`${s.fromId}->${s.intoId}`] = true;
-      setSelected(init);
+      setPlan(body);
+      const subs = {};
+      (body.subjectMerges || []).forEach((m, i) => { subs[i] = true; });
+      const evs = {};
+      (body.eventMerges || []).forEach((m, i) => { evs[i] = true; });
+      setSubjectChecks(subs);
+      setEventChecks(evs);
     } catch (err) {
       setError(err.message || String(err));
     } finally {
@@ -302,17 +307,17 @@ function DedupButton() {
   };
 
   const apply = async () => {
-    const merges = suggestions
-      .filter((s) => selected[`${s.fromId}->${s.intoId}`])
-      .map(({ fromId, intoId }) => ({ fromId, intoId }));
-    if (merges.length === 0) return;
+    if (!plan) return;
+    const subjectMerges = (plan.subjectMerges || []).filter((_, i) => subjectChecks[i]);
+    const eventMerges = (plan.eventMerges || []).filter((_, i) => eventChecks[i]);
+    if (subjectMerges.length === 0 && eventMerges.length === 0) return;
     setBusy(true);
     setError(null);
     try {
       const res = await fetch('/api/subjects/dedup', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ merges, deleteGoogleEvents: deleteGoogle }),
+        body: JSON.stringify({ subjectMerges, eventMerges }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
@@ -325,80 +330,81 @@ function DedupButton() {
     }
   };
 
+  const isEmpty = plan && (plan.subjectMerges || []).length === 0 && (plan.eventMerges || []).length === 0;
+
   const modal = open ? (
     <div className="modal-backdrop" onClick={close}>
       <div className="modal import-result" onClick={(e) => e.stopPropagation()}>
         <header>
-          <h2>Find duplicate subjects</h2>
-          <button type="button" className="close" onClick={close} aria-label="Close">✕</button>
+          <h2>Find duplicates</h2>
+          <button type="button" className="close" onClick={close} aria-label="Close">x</button>
         </header>
         <div className="body">
-          {loading && <div style={{ color: 'var(--ink-muted-80)' }}>Scanning…</div>}
-          {!loading && suggestions.length === 0 && !result && (
+          {loading && <div style={{ color: 'var(--ink-muted-80)' }}>Agent is analysing subjects + event clusters...</div>}
+          {!loading && isEmpty && !result && (
             <div style={{ color: 'var(--ink-muted-80)', fontSize: 14 }}>
-              No duplicates detected. Subjects whose code differs only by a trailing
-              section letter (e.g. <code>CMPT 307</code> vs <code>CMPT 307D</code>) would
-              show up here.
+              No duplicates detected by the agent.
             </div>
           )}
-          {!loading && suggestions.length > 0 && (
+          {!loading && plan && !isEmpty && (
             <>
               <p style={{ fontSize: 13, color: 'var(--ink-muted-80)', margin: '4px 0 12px' }}>
-                Each row collapses the left subject into the right. Local events get re-attributed; if you also delete Google events, the next sync rebuilds them under the canonical id.
+                The agent proposes the merges below. Subject merges run first (re-attributing events), then event merges drop duplicate Google entries and record a redirect so future syncs don't recreate them.
               </p>
-              <div className="dedup-list">
-                {suggestions.map((s) => {
-                  const key = `${s.fromId}->${s.intoId}`;
-                  return (
-                    <label key={key} className="dedup-row">
-                      <input
-                        type="checkbox"
-                        checked={!!selected[key]}
-                        onChange={(e) => setSelected({ ...selected, [key]: e.target.checked })}
-                      />
-                      <div style={{ flex: 1 }}>
-                        <div><strong>{s.fromCode}</strong> → <strong>{s.intoCode}</strong></div>
-                        <div className="sub">
-                          {s.reason} · {s.fromEventCount} event{s.fromEventCount === 1 ? '' : 's'} to move.
+              {(plan.subjectMerges || []).length > 0 && (
+                <>
+                  <h3 className="dedup-section-h">Subject merges</h3>
+                  <div className="dedup-list">
+                    {plan.subjectMerges.map((m, i) => (
+                      <label key={`s${i}`} className="dedup-row">
+                        <input
+                          type="checkbox"
+                          checked={!!subjectChecks[i]}
+                          onChange={(e) => setSubjectChecks({ ...subjectChecks, [i]: e.target.checked })}
+                        />
+                        <div style={{ flex: 1 }}>
+                          <div><strong>{m.fromId}</strong> -> <strong>{m.intoId}</strong></div>
+                          <div className="sub">{m.reason}</div>
                         </div>
-                      </div>
-                    </label>
-                  );
-                })}
-              </div>
-              <label className="dedup-toggle">
-                <input
-                  type="checkbox"
-                  checked={deleteGoogle}
-                  onChange={(e) => setDeleteGoogle(e.target.checked)}
-                />
-                <span>
-                  Also delete the duplicate's events from Google Calendar
-                  <div className="sub">Recommended — otherwise you'll see them twice until cleaned manually.</div>
-                </span>
-              </label>
+                      </label>
+                    ))}
+                  </div>
+                </>
+              )}
+              {(plan.eventMerges || []).length > 0 && (
+                <>
+                  <h3 className="dedup-section-h">Event merges</h3>
+                  <div className="dedup-list">
+                    {plan.eventMerges.map((m, i) => (
+                      <label key={`e${i}`} className="dedup-row">
+                        <input
+                          type="checkbox"
+                          checked={!!eventChecks[i]}
+                          onChange={(e) => setEventChecks({ ...eventChecks, [i]: e.target.checked })}
+                        />
+                        <div style={{ flex: 1 }}>
+                          <div>Keep <code>{m.canonicalEventId.slice(0, 16)}...</code>, drop {m.redundantEventIds.length} other{m.redundantEventIds.length === 1 ? '' : 's'}</div>
+                          <div className="sub">{m.reason}</div>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </>
+              )}
             </>
           )}
           {result && (
             <div className="summary" style={{ marginTop: 14 }}>
-              Merged {result.merges.length} subject{result.merges.length === 1 ? '' : 's'}.
-              {result.merges.map((r) => (
-                <div key={r.fromId} style={{ marginTop: 6 }}>
-                  <code>{r.fromId}</code> → <code>{r.intoId}</code>:
-                  &nbsp;{r.localItemsDeleted} local row{r.localItemsDeleted === 1 ? '' : 's'} dropped,
-                  &nbsp;{r.googleEventsDeleted} google event{r.googleEventsDeleted === 1 ? '' : 's'} deleted
-                  {r.googleDeleteFailures > 0 ? ` (${r.googleDeleteFailures} failures)` : ''}.
-                </div>
-              ))}
+              {result.subjectMerges} subject merge{result.subjectMerges === 1 ? '' : 's'}  -  {result.eventMerges} event merge{result.eventMerges === 1 ? '' : 's'}  -  {result.googleEventsDeleted} Google events removed.
             </div>
           )}
           {error && <div className="form-error" style={{ marginTop: 12 }}>{error}</div>}
         </div>
         <footer className="modal-foot">
           <button type="button" className="btn-ghost-pill" onClick={close} disabled={busy}>Close</button>
-          {suggestions.length > 0 && !result && (
+          {plan && !isEmpty && !result && (
             <button type="button" className="btn-primary" onClick={apply} disabled={busy}>
-              {busy ? 'Merging…' : 'Merge selected'}
+              {busy ? 'Merging...' : 'Apply selected'}
             </button>
           )}
         </footer>
@@ -436,7 +442,7 @@ function SubjectsPage({ now }) {
           <div>
             <h1>Your classes</h1>
             <div className="sub">
-              {visibleSubjects.length} subjects · stored in{' '}
+              {visibleSubjects.length} subjects  -  stored in{' '}
               <code style={{ background: 'var(--parchment)', padding: '2px 6px', borderRadius: 4, fontSize: 14 }}>data/subjects.json</code>
             </div>
           </div>
@@ -456,13 +462,13 @@ function SubjectsPage({ now }) {
                 <div className="accent" style={{ background: s.color }}></div>
                 <div className="code">{s.code || s.id}</div>
                 <div className="name">{s.name}</div>
-                <div className="prof">{s.professor}{s.room ? ` · ${s.room}` : ''}</div>
+                <div className="prof">{s.professor}{s.room ? `  -  ${s.room}` : ''}</div>
                 {next ? (
                   <div style={{ marginTop: 14, fontSize: 13, color: 'var(--ink-muted-80)' }}>
-                    <span style={{ color: 'var(--ink-muted-48)' }}>Next · </span>
-                    {next.summary.replace(/^(Lecture|Tutorial|Office hours) · /, '')}
+                    <span style={{ color: 'var(--ink-muted-48)' }}>Next  -  </span>
+                    {next.summary.replace(/^(Lecture|Tutorial|Office hours)  -  /, '')}
                     <div style={{ fontSize: 12, color: 'var(--ink-muted-48)', marginTop: 2 }}>
-                      {Util.relTime(next.start, now)} · {Util.fmtTime(next.start)}
+                      {Util.relTime(next.start, now)}  -  {Util.fmtTime(next.start)}
                     </div>
                   </div>
                 ) : (
@@ -507,10 +513,10 @@ function PipelineBlock() {
   const s = window.SYNC_STATUS;
   const lastLabel = s.lastRunISO
     ? new Date(s.lastRunISO).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: false })
-    : '—';
+    : ' - ';
   const nextLabel = s.nextRunISO
     ? new Date(s.nextRunISO).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: false })
-    : '—';
+    : ' - ';
   const errColor = s.agentErrorsLastWeek === 0 ? '#1f8a5b' : '#c97a17';
   return (
     <div className="sources-card">
@@ -519,8 +525,8 @@ function PipelineBlock() {
         <span>{lastLabel}</span>
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, padding: '6px 0', borderTop: '1px solid var(--divider-soft)' }}>
-        <span style={{ color: 'var(--ink-muted-48)' }}>Items added (last run · 7d)</span>
-        <span>{s.itemsAddedLastRun} · {s.itemsAddedLastWeek}</span>
+        <span style={{ color: 'var(--ink-muted-48)' }}>Items added (last run  -  7d)</span>
+        <span>{s.itemsAddedLastRun}  -  {s.itemsAddedLastWeek}</span>
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, padding: '6px 0', borderTop: '1px solid var(--divider-soft)' }}>
         <span style={{ color: 'var(--ink-muted-48)' }}>Agent errors (7d)</span>
@@ -568,7 +574,7 @@ function SubjectDetail({ id, now }) {
     : 'never';
 
   return (
-    <div data-screen-label={`Subject · ${s.code || s.id}`}>
+    <div data-screen-label={`Subject  -  ${s.code || s.id}`}>
       <SubNav
         title={s.code || s.id}
         crumbs={[{ label: 'Subjects', href: '#/subjects' }, { label: s.code || s.id }]}
@@ -582,12 +588,12 @@ function SubjectDetail({ id, now }) {
       <div className="subject-detail">
         <div className="sd-head">
           <div>
-            <div className="code-tag"><span className="swatch" style={{ background: s.color }}></span>{s.code || s.id}{s.term ? ` · ${s.term}` : ''}</div>
+            <div className="code-tag"><span className="swatch" style={{ background: s.color }}></span>{s.code || s.id}{s.term ? `  -  ${s.term}` : ''}</div>
             <h1>{s.name}</h1>
             <div className="prof">{s.professor}</div>
             <div style={{ marginTop: 12, display: 'flex', gap: 18, color: 'var(--ink-muted-80)', fontSize: 14, flexWrap: 'wrap' }}>
-              {s.room && <span>📍 {s.room}</span>}
-              <span>📁 <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12 }}>{s.destinationFolder}</span></span>
+              {s.room && <span> {s.room}</span>}
+              <span> <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12 }}>{s.destinationFolder}</span></span>
             </div>
           </div>
           <div className="right">
@@ -609,11 +615,11 @@ function SubjectDetail({ id, now }) {
                     <div key={e.itemId + e.start.toISOString()} className="assignment-row">
                       <div className="when">
                         <span className="day">{e.start.toLocaleDateString('en-US', { weekday: 'short', month: 'short' })}</span>
-                        {e.start.getDate()} · {Util.fmtTimeShort(e.start)}
+                        {e.start.getDate()}  -  {Util.fmtTimeShort(e.start)}
                       </div>
                       <div>
-                        <div className="title">{e.summary.replace(/^(Lecture|Tutorial|Office hours) · /, '')}</div>
-                        <div className="sub">{isInstant ? `Due${e.room ? ` · ${e.room}` : ''}` : `${Util.fmtTime(e.start)} – ${Util.fmtTime(e.end)}${e.room ? ` · ${e.room}` : ''}`}</div>
+                        <div className="title">{e.summary.replace(/^(Lecture|Tutorial|Office hours)  -  /, '')}</div>
+                        <div className="sub">{isInstant ? `Due${e.room ? `  -  ${e.room}` : ''}` : `${Util.fmtTime(e.start)} - ${Util.fmtTime(e.end)}${e.room ? `  -  ${e.room}` : ''}`}</div>
                       </div>
                       <div className={"kind " + e.kind}>{Util.kindLabel(e.kind)}</div>
                     </div>
@@ -624,7 +630,7 @@ function SubjectDetail({ id, now }) {
 
             <div className="sd-section">
               <h2>Files</h2>
-              <div className="sec-sub">Synced to <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 13 }}>{s.destinationFolder}</span> · de-duplicated by SHA-256.</div>
+              <div className="sec-sub">Synced to <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 13 }}>{s.destinationFolder}</span>  -  de-duplicated by SHA-256.</div>
               <div className="files-list">
                 {files.length === 0 && <div style={{ padding: '14px 18px', color: 'var(--ink-muted-48)', fontSize: 14 }}>No files downloaded yet.</div>}
                 {files.map((f) => (
@@ -632,7 +638,7 @@ function SubjectDetail({ id, now }) {
                     <span className="file-icon">{(f.filename.split('.').pop() || 'FILE').toUpperCase().slice(0, 4)}</span>
                     <div className="name">
                       {f.filename}
-                      <div className="meta">Added {f.addedISO ? new Date(f.addedISO).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}</div>
+                      <div className="meta">Added {f.addedISO ? new Date(f.addedISO).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ' - '}</div>
                     </div>
                     <div className="size">{f.size}</div>
                   </div>

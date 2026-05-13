@@ -7,7 +7,7 @@ import { upsertEvent } from './sync/calendar.js';
 import { downloadAttachment } from './sync/files.js';
 import { logger } from './logger.js';
 import { CourSysAuthError } from './auth/coursys.js';
-import { syncIcalSubscription, ICAL_URL_SETTING } from './import/icalSync.js';
+import { runFullIcalSync, ICAL_URL_SETTING } from './import/icalSync.js';
 
 export interface RunContext {
   googleAuth: OAuth2Client;
@@ -35,13 +35,13 @@ export async function runPipeline(
   };
   const registry = new FetcherRegistry(ctx);
 
-  // iCal subscription is the default ingestion path — if a global CourSys
+  // iCal subscription is the default ingestion path  -  if a global CourSys
   // iCal URL is saved, sync it first so any auto-created subjects exist
   // before the per-subject email/site loop runs.
   const icalUrl = ctx.store.getSetting(ICAL_URL_SETTING);
   if (icalUrl) {
     try {
-      const r = await syncIcalSubscription(icalUrl, {
+      const r = await runFullIcalSync(icalUrl, {
         googleAuth: ctx.googleAuth,
         store: ctx.store,
       });
@@ -50,10 +50,10 @@ export async function runPipeline(
       summary.failures += r.failures;
     } catch (err) {
       summary.failures++;
-      logger.error({ err }, 'ical: sync failed — continuing with per-subject sources');
+      logger.error({ err }, 'ical: sync failed  -  continuing with per-subject sources');
     }
   } else {
-    logger.info('ical: no URL configured — skipping');
+    logger.info('ical: no URL configured  -  skipping');
   }
 
   try {
@@ -62,30 +62,30 @@ export async function runPipeline(
       const subjectLog = logger.child({ subjectId: subject.id });
       subjectLog.info(
         { name: subject.name, sources: subject.sources.length },
-        `→ subject ${subject.name}`,
+        `-> subject ${subject.name}`,
       );
       for (const source of subject.sources) {
         summary.sourcesProcessed++;
         const label = describeSource(source);
-        subjectLog.info({ source: label }, `  → source ${label}`);
+        subjectLog.info({ source: label }, `  -> source ${label}`);
         try {
           const events = await processSource(subject, source, registry, ctx);
           summary.itemsProcessed += events.items;
           summary.eventsUpserted += events.upserted;
           subjectLog.info(
             { source: label, items: events.items, upserted: events.upserted },
-            `    ✓ source done`,
+            `    + source done`,
           );
         } catch (err) {
           summary.failures++;
           if (err instanceof CourSysAuthError) {
             subjectLog.error(
               { err: err.message, source: label },
-              'coursys auth failed — bailing out',
+              'coursys auth failed  -  bailing out',
             );
             throw err;
           }
-          subjectLog.error({ err, source: label }, '    ✗ source failed');
+          subjectLog.error({ err, source: label }, '    x source failed');
         }
       }
     }
@@ -108,7 +108,7 @@ async function processSource(
   if (items.length === 0) {
     logger.info(
       { subjectId: subject.id, source: describeSource(source) },
-      '    (no new items — skipping agent)',
+      '    (no new items  -  skipping agent)',
     );
   }
   let upserted = 0;
@@ -122,16 +122,16 @@ async function processSource(
 
     log.info(
       { contentChars: item.content.length, attachments: item.attachments.length },
-      '      → asking agent to extract events',
+      '      -> asking agent to extract events',
     );
     const extracted = await extractEvents(subject, source, item.content, {
       store: ctx.store,
     });
     if (!extracted) {
-      log.warn('      ✗ agent returned no object; skipping item (raw output logged)');
+      log.warn('      x agent returned no object; skipping item (raw output logged)');
       continue;
     }
-    log.info({ events: extracted.events.length }, '      ← agent emitted events');
+    log.info({ events: extracted.events.length }, '      <- agent emitted events');
 
     for (const event of extracted.events) {
       try {
@@ -156,7 +156,7 @@ async function processSource(
     }
 
     // Source-level attachments (e.g. files referenced in an email or page but
-    // not pulled into a specific event) — best-effort download too.
+    // not pulled into a specific event)  -  best-effort download too.
     for (const attachment of item.attachments) {
       await downloadAttachment(attachment, subject.destinationFolder, {
         googleAuth: ctx.googleAuth,

@@ -115,7 +115,7 @@ async function fetchHttp(url: string): Promise<Buffer | null> {
       if (header) headers['Cookie'] = header;
     }
   } catch {
-    // No cookies — fine for public hosts.
+    // No cookies  -  fine for public hosts.
   }
 
   const res = await fetch(url, { headers, redirect: 'follow' });

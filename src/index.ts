@@ -11,7 +11,7 @@ import { runPipeline } from './pipeline.js';
 import { notifyAuthFailure } from './notify/notifier.js';
 import { parseSchedulePdf } from './import/sfuPdf.js';
 import { bootstrapFromSchedule } from './import/bootstrap.js';
-import { syncIcalSubscription, ICAL_URL_SETTING } from './import/icalSync.js';
+import { runFullIcalSync, ICAL_URL_SETTING } from './import/icalSync.js';
 
 type Command =
   | 'run'
@@ -87,7 +87,7 @@ async function maybeJitter(command: Command): Promise<void> {
 async function main(): Promise<void> {
   const command = parseCommand(process.argv);
   await maybeJitter(command);
-  // import:sfu parses its own args and needs to read subjects via the store —
+  // import:sfu parses its own args and needs to read subjects via the store  - 
   // loading them here would be redundant but it's also the cheapest sanity
   // check that the store boots.
   const subjects = loadSubjects();
@@ -130,11 +130,11 @@ async function main(): Promise<void> {
         const url = process.argv[3] ?? store.getSetting(ICAL_URL_SETTING);
         if (!url) {
           throw new Error(
-            'no iCal URL configured. Pass as arg or save via the UI (Schedule → iCal subscription).',
+            'no iCal URL configured. Pass as arg or save via the UI (Schedule -> iCal subscription).',
           );
         }
         const googleAuth = await getAuthorizedClient();
-        const result = await syncIcalSubscription(url, { googleAuth, store });
+        const result = await runFullIcalSync(url, { googleAuth, store });
         logger.info(result, 'sync:ical finished');
       } finally {
         store.close();

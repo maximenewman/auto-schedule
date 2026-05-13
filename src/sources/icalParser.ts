@@ -2,7 +2,7 @@
  * Minimal RFC 5545 (iCalendar) parser for the bits we need from CourSys:
  * UID, SUMMARY, DESCRIPTION, LOCATION, DTSTART, DTEND, RRULE, CATEGORIES.
  *
- * Deliberately tiny — no recurrence expansion (we pass RRULE through to
+ * Deliberately tiny  -  no recurrence expansion (we pass RRULE through to
  * Google), no VTIMEZONE handling beyond TZID lookup, no support for
  * floating-point durations or weird parameters. CourSys output is plain.
  */
@@ -25,7 +25,7 @@ export interface IcalEvent {
 
 const DEFAULT_TZ = 'America/Vancouver';
 
-/** Unfold (RFC 5545 §3.1): a line beginning with SPACE or TAB is a continuation. */
+/** Unfold (RFC 5545 section3.1): a line beginning with SPACE or TAB is a continuation. */
 function unfold(text: string): string[] {
   const lines = text.replace(/\r\n/g, '\n').split('\n');
   const out: string[] = [];
@@ -132,7 +132,7 @@ function parseDateTime(prop: RawProp): { iso: string; allDay: boolean } {
     const yyyy = v.slice(0, 4);
     const mm = v.slice(4, 6);
     const dd = v.slice(6, 8);
-    // Anchor at midnight America/Vancouver — Google honours the offset on
+    // Anchor at midnight America/Vancouver  -  Google honours the offset on
     // the dateTime regardless of `timeZone`, so this is unambiguous.
     const localDate = `${yyyy}-${mm}-${dd}`;
     return {
@@ -145,7 +145,7 @@ function parseDateTime(prop: RawProp): { iso: string; allDay: boolean } {
     const [date, timeZ] = v.split('T');
     return { iso: toIsoUtc(date!, timeZ!.replace(/Z$/, '')), allDay: false };
   }
-  // Local with TZID parameter (or floating — treat as default TZ).
+  // Local with TZID parameter (or floating  -  treat as default TZ).
   const [date, time] = v.split('T');
   const tz = prop.params.TZID || DEFAULT_TZ;
   return { iso: toIsoLocal(date!, time ?? '000000', tz), allDay: false };

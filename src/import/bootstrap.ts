@@ -92,7 +92,7 @@ function offsetFor(localDate: string): string {
 }
 
 function localIso(date: string, time: string): string {
-  // "2026-05-12" + "14:30" → "2026-05-12T14:30:00-07:00"
+  // "2026-05-12" + "14:30" -> "2026-05-12T14:30:00-07:00"
   return `${date}T${time}:00${offsetFor(date)}`;
 }
 
