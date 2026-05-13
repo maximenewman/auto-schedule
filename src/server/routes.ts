@@ -25,6 +25,8 @@ import {
 } from './status.js';
 import { parseSchedulePdf } from '../import/sfuPdf.js';
 import { bootstrapFromSchedule } from '../import/bootstrap.js';
+import { syncIcalSubscription, ICAL_URL_SETTING } from '../import/icalSync.js';
+import { findDuplicateSubjects, mergeSubject } from '../import/dedup.js';
 import { getAuthorizedClient } from '../auth/google.js';
 import { listGoogleEvents } from '../sync/calendarRead.js';
 import type { OAuth2Client } from 'google-auth-library';
@@ -220,6 +222,93 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
       running: ctx.runState.current,
       lastRun: ctx.runState.lastRun,
     };
+  });
+
+  app.get('/api/subjects/dedup', async () => {
+    return { suggestions: findDuplicateSubjects(loadSubjects(), ctx.store) };
+  });
+
+  app.post('/api/subjects/dedup', async (req, reply) => {
+    const body = req.body as {
+      merges?: Array<{ fromId?: unknown; intoId?: unknown }>;
+      deleteGoogleEvents?: unknown;
+    };
+    if (!Array.isArray(body?.merges) || body.merges.length === 0) {
+      return reply.code(400).send({ error: 'merges array is required' });
+    }
+    const deleteGoogleEvents = body.deleteGoogleEvents === true;
+    const auth = deleteGoogleEvents ? await getAuth() : null;
+    if (deleteGoogleEvents && !auth) {
+      return reply.code(503).send({ error: 'google auth not set up; cannot delete google events' });
+    }
+    const results = [];
+    for (const m of body.merges) {
+      const fromId = typeof m.fromId === 'string' ? m.fromId : '';
+      const intoId = typeof m.intoId === 'string' ? m.intoId : '';
+      if (!fromId || !intoId) {
+        return reply.code(400).send({ error: 'each merge needs fromId + intoId' });
+      }
+      try {
+        const r = await mergeSubject({
+          fromId,
+          intoId,
+          store: ctx.store,
+          googleAuth: auth ?? undefined,
+          deleteGoogleEvents,
+        });
+        results.push(r);
+      } catch (err) {
+        logger.error({ err, fromId, intoId }, 'dedup: merge failed');
+        return reply.code(500).send({
+          error: err instanceof Error ? err.message : String(err),
+          completed: results,
+        });
+      }
+    }
+    return { merges: results };
+  });
+
+  app.get('/api/settings/ical-url', async () => {
+    return { url: ctx.store.getSetting(ICAL_URL_SETTING) };
+  });
+
+  app.put('/api/settings/ical-url', async (req, reply) => {
+    const body = req.body as { url?: unknown };
+    const raw = typeof body?.url === 'string' ? body.url.trim() : '';
+    if (raw === '') {
+      ctx.store.deleteSetting(ICAL_URL_SETTING);
+      return { url: null };
+    }
+    try {
+      const u = new URL(raw);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+        return reply.code(400).send({ error: 'url must be http(s)' });
+      }
+    } catch {
+      return reply.code(400).send({ error: 'invalid url' });
+    }
+    ctx.store.setSetting(ICAL_URL_SETTING, raw);
+    return { url: raw };
+  });
+
+  app.post('/api/import/ical', async (_req, reply) => {
+    const url = ctx.store.getSetting(ICAL_URL_SETTING);
+    if (!url) {
+      return reply.code(400).send({ error: 'no iCal URL configured' });
+    }
+    try {
+      const auth = await getAuth();
+      if (!auth) return reply.code(503).send({ error: 'google auth not set up' });
+      const result = await syncIcalSubscription(url, {
+        googleAuth: auth,
+        store: ctx.store,
+      });
+      return result;
+    } catch (err) {
+      logger.error({ err }, 'import:ical failed');
+      const msg = err instanceof Error ? err.message : String(err);
+      return reply.code(500).send({ error: msg });
+    }
   });
 
   app.post('/api/import/sfu', async (req, reply) => {

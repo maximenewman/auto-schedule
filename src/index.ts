@@ -11,13 +11,15 @@ import { runPipeline } from './pipeline.js';
 import { notifyAuthFailure } from './notify/notifier.js';
 import { parseSchedulePdf } from './import/sfuPdf.js';
 import { bootstrapFromSchedule } from './import/bootstrap.js';
+import { syncIcalSubscription, ICAL_URL_SETTING } from './import/icalSync.js';
 
 type Command =
   | 'run'
   | 'setup:google'
   | 'setup:coursys'
   | 'test:calendar'
-  | 'import:sfu';
+  | 'import:sfu'
+  | 'sync:ical';
 
 const COMMANDS: readonly Command[] = [
   'run',
@@ -25,6 +27,7 @@ const COMMANDS: readonly Command[] = [
   'setup:coursys',
   'test:calendar',
   'import:sfu',
+  'sync:ical',
 ];
 
 function parseCommand(argv: string[]): Command {
@@ -119,6 +122,23 @@ async function main(): Promise<void> {
     }
     case 'setup:coursys': {
       await runCourSysSetup();
+      return;
+    }
+    case 'sync:ical': {
+      const store = new StateStore();
+      try {
+        const url = process.argv[3] ?? store.getSetting(ICAL_URL_SETTING);
+        if (!url) {
+          throw new Error(
+            'no iCal URL configured. Pass as arg or save via the UI (Schedule → iCal subscription).',
+          );
+        }
+        const googleAuth = await getAuthorizedClient();
+        const result = await syncIcalSubscription(url, { googleAuth, store });
+        logger.info(result, 'sync:ical finished');
+      } finally {
+        store.close();
+      }
       return;
     }
     case 'import:sfu': {

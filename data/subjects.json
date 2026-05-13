@@ -48,6 +48,32 @@
           "label": "STAT 302"
         }
       ]
+    },
+    {
+      "id": "holidays",
+      "code": "Holidays",
+      "name": "Holidays",
+      "professor": "",
+      "term": "",
+      "color": "#c97a17",
+      "destinationFolder": "downloads/Holidays",
+      "sources": []
+    },
+    {
+      "id": "cmpt426d",
+      "code": "CMPT 426D",
+      "name": "CMPT 426D",
+      "professor": "TBD",
+      "destinationFolder": "downloads/CMPT 426D",
+      "sources": []
+    },
+    {
+      "id": "cmpt427d",
+      "code": "CMPT 427D",
+      "name": "CMPT 427D",
+      "professor": "TBD",
+      "destinationFolder": "downloads/CMPT 427D",
+      "sources": []
     }
   ]
 }

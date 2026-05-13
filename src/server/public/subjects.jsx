@@ -258,17 +258,177 @@ function SubjectForm({ initial, mode, onCancel, onSaved }) {
   );
 }
 
+// Synthetic buckets the iCal sync creates that shouldn't appear as a
+// regular subject card (events tagged with this id still render in the
+// schedule view — Util.subjectById still finds them in window.SUBJECTS).
+const HIDDEN_SUBJECT_IDS = new Set(['holidays']);
+
+function DedupButton() {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [suggestions, setSuggestions] = useState([]);
+  const [selected, setSelected] = useState({});
+  const [deleteGoogle, setDeleteGoogle] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [result, setResult] = useState(null);
+
+  const close = () => {
+    setOpen(false);
+    setSuggestions([]);
+    setSelected({});
+    setError(null);
+    setResult(null);
+  };
+
+  const openModal = async () => {
+    setOpen(true);
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    try {
+      const res = await fetch('/api/subjects/dedup');
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      setSuggestions(body.suggestions || []);
+      const init = {};
+      for (const s of body.suggestions || []) init[`${s.fromId}->${s.intoId}`] = true;
+      setSelected(init);
+    } catch (err) {
+      setError(err.message || String(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const apply = async () => {
+    const merges = suggestions
+      .filter((s) => selected[`${s.fromId}->${s.intoId}`])
+      .map(({ fromId, intoId }) => ({ fromId, intoId }));
+    if (merges.length === 0) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/subjects/dedup', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ merges, deleteGoogleEvents: deleteGoogle }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      setResult(body);
+      await window.bootData();
+    } catch (err) {
+      setError(err.message || String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const modal = open ? (
+    <div className="modal-backdrop" onClick={close}>
+      <div className="modal import-result" onClick={(e) => e.stopPropagation()}>
+        <header>
+          <h2>Find duplicate subjects</h2>
+          <button type="button" className="close" onClick={close} aria-label="Close">✕</button>
+        </header>
+        <div className="body">
+          {loading && <div style={{ color: 'var(--ink-muted-80)' }}>Scanning…</div>}
+          {!loading && suggestions.length === 0 && !result && (
+            <div style={{ color: 'var(--ink-muted-80)', fontSize: 14 }}>
+              No duplicates detected. Subjects whose code differs only by a trailing
+              section letter (e.g. <code>CMPT 307</code> vs <code>CMPT 307D</code>) would
+              show up here.
+            </div>
+          )}
+          {!loading && suggestions.length > 0 && (
+            <>
+              <p style={{ fontSize: 13, color: 'var(--ink-muted-80)', margin: '4px 0 12px' }}>
+                Each row collapses the left subject into the right. Local events get re-attributed; if you also delete Google events, the next sync rebuilds them under the canonical id.
+              </p>
+              <div className="dedup-list">
+                {suggestions.map((s) => {
+                  const key = `${s.fromId}->${s.intoId}`;
+                  return (
+                    <label key={key} className="dedup-row">
+                      <input
+                        type="checkbox"
+                        checked={!!selected[key]}
+                        onChange={(e) => setSelected({ ...selected, [key]: e.target.checked })}
+                      />
+                      <div style={{ flex: 1 }}>
+                        <div><strong>{s.fromCode}</strong> → <strong>{s.intoCode}</strong></div>
+                        <div className="sub">
+                          {s.reason} · {s.fromEventCount} event{s.fromEventCount === 1 ? '' : 's'} to move.
+                        </div>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+              <label className="dedup-toggle">
+                <input
+                  type="checkbox"
+                  checked={deleteGoogle}
+                  onChange={(e) => setDeleteGoogle(e.target.checked)}
+                />
+                <span>
+                  Also delete the duplicate's events from Google Calendar
+                  <div className="sub">Recommended — otherwise you'll see them twice until cleaned manually.</div>
+                </span>
+              </label>
+            </>
+          )}
+          {result && (
+            <div className="summary" style={{ marginTop: 14 }}>
+              Merged {result.merges.length} subject{result.merges.length === 1 ? '' : 's'}.
+              {result.merges.map((r) => (
+                <div key={r.fromId} style={{ marginTop: 6 }}>
+                  <code>{r.fromId}</code> → <code>{r.intoId}</code>:
+                  &nbsp;{r.localItemsDeleted} local row{r.localItemsDeleted === 1 ? '' : 's'} dropped,
+                  &nbsp;{r.googleEventsDeleted} google event{r.googleEventsDeleted === 1 ? '' : 's'} deleted
+                  {r.googleDeleteFailures > 0 ? ` (${r.googleDeleteFailures} failures)` : ''}.
+                </div>
+              ))}
+            </div>
+          )}
+          {error && <div className="form-error" style={{ marginTop: 12 }}>{error}</div>}
+        </div>
+        <footer className="modal-foot">
+          <button type="button" className="btn-ghost-pill" onClick={close} disabled={busy}>Close</button>
+          {suggestions.length > 0 && !result && (
+            <button type="button" className="btn-primary" onClick={apply} disabled={busy}>
+              {busy ? 'Merging…' : 'Merge selected'}
+            </button>
+          )}
+        </footer>
+      </div>
+    </div>
+  ) : null;
+
+  return (
+    <>
+      <button type="button" className="btn-ghost-pill" onClick={openModal}>Find duplicates</button>
+      {modal && ReactDOM.createPortal(modal, document.body)}
+    </>
+  );
+}
+
 function SubjectsPage({ now }) {
   const [form, setForm] = useState(null); // { mode: 'create' | 'edit', subject? }
+  const visibleSubjects = window.SUBJECTS.filter((s) => !HIDDEN_SUBJECT_IDS.has(s.id));
 
   return (
     <div data-screen-label="Subjects">
       <SubNav
         title="Subjects"
         right={(
-          <button className="btn-primary" onClick={() => setForm({ mode: 'create' })}>
-            Add subject
-          </button>
+          <>
+            <DedupButton />
+            <button className="btn-primary" onClick={() => setForm({ mode: 'create' })}>
+              Add subject
+            </button>
+          </>
         )}
       />
       <div className="subjects-page">
@@ -276,7 +436,7 @@ function SubjectsPage({ now }) {
           <div>
             <h1>Your classes</h1>
             <div className="sub">
-              {window.SUBJECTS.length} subjects · stored in{' '}
+              {visibleSubjects.length} subjects · stored in{' '}
               <code style={{ background: 'var(--parchment)', padding: '2px 6px', borderRadius: 4, fontSize: 14 }}>data/subjects.json</code>
             </div>
           </div>
@@ -284,7 +444,7 @@ function SubjectsPage({ now }) {
         </div>
 
         <div className="subjects-grid">
-          {window.SUBJECTS.map((s) => {
+          {visibleSubjects.map((s) => {
             const next = window.EVENTS
               .filter((e) => e.subjectId === s.id && e.start > now)
               .sort((a, b) => a.start - b.start)[0];

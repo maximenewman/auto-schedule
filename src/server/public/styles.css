@@ -784,6 +784,21 @@ button { font-family: inherit; cursor: pointer; border: 0; background: none; col
   padding: 14px 24px 18px;
 }
 
+/* Subject dedup */
+.dedup-list { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 14px; }
+.dedup-row {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 10px 12px; border: 1px solid var(--divider-soft); border-radius: 8px;
+  cursor: pointer;
+}
+.dedup-row:hover { background: var(--parchment); }
+.dedup-row .sub { font-size: 12px; color: var(--ink-muted-48); margin-top: 2px; }
+.dedup-toggle {
+  display: flex; gap: 8px; align-items: flex-start;
+  padding: 10px 0 4px; font-size: 13px; cursor: pointer;
+}
+.dedup-toggle .sub { font-size: 11px; color: var(--ink-muted-48); margin-top: 2px; }
+
 .subject-form .grid-2 {
   display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px;
   padding: 12px 24px 4px;
