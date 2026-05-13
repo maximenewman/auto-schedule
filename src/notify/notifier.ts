@@ -101,7 +101,7 @@ export async function notifyAuthFailure(
   }
 
   // Only the Google client can write a calendar event. If Google itself is the
-  // problem we can't recover here — just log.
+  // problem we can't recover here  -  just log.
   if (!auth) {
     return;
   }

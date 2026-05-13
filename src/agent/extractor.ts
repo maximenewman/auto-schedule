@@ -71,8 +71,8 @@ export async function extractEvents(
         lookup_calendar_event: tool({
           description:
             "Look up an existing Google Calendar event for this subject by stable itemId. " +
-            "Returns { exists, summary, description, room, startISO, endISO } — call this BEFORE emitting an event to check whether the user already has data for it. " +
-            "When an existing event has a non-empty value for a field, prefer to omit your value (it won't be overwritten) — that way handwritten edits are preserved.",
+            "Returns { exists, summary, description, room, startISO, endISO }  -  call this BEFORE emitting an event to check whether the user already has data for it. " +
+            "When an existing event has a non-empty value for a field, prefer to omit your value (it won't be overwritten)  -  that way handwritten edits are preserved.",
           parameters: z.object({
             itemId: z
               .string()

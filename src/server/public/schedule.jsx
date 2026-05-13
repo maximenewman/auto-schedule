@@ -58,9 +58,9 @@ function WeekGrid({ weekStart, now, onEventClick }) {
                   className={"event kind-" + e.kind}
                   style={{ top, height, borderLeftColor: subj.color }}
                   onClick={() => onEventClick && onEventClick(e)}
-                  title={`${subj.code} · ${e.summary} · ${Util.fmtTime(e.start)}`}>
+                  title={`${subj.code}  -  ${e.summary}  -  ${Util.fmtTime(e.start)}`}>
                   <div className="ev-time">{isInstant ? `Due ${Util.fmtTime(e.start)}` : `${Util.fmtTime(e.start)}`}</div>
-                  <div className="ev-title">{subj.code} · {e.summary.replace(/^(Lecture|Tutorial|Office hours) · /, '')}</div>
+                  <div className="ev-title">{subj.code}  -  {e.summary.replace(/^(Lecture|Tutorial|Office hours)  -  /, '')}</div>
                   {e.room && height > 50 && <div className="ev-room">{e.room}</div>}
                 </div>
               );
@@ -84,11 +84,11 @@ function NowHero({ now }) {
     return (
       <div className="now-hero">
         <div className="now-badge"><span className="pulse" style={{ background: subj.color }}></span>Now</div>
-        <h2>{subj.code} · {happening.summary.replace(/^(Lecture|Tutorial|Office hours) · /, '')}</h2>
-        <div className="meta">{Util.fmtTime(happening.start)} – {Util.fmtTime(happening.end)} · {happening.room}</div>
+        <h2>{subj.code}  -  {happening.summary.replace(/^(Lecture|Tutorial|Office hours)  -  /, '')}</h2>
+        <div className="meta">{Util.fmtTime(happening.start)} - {Util.fmtTime(happening.end)}  -  {happening.room}</div>
         <div className="progress"><div style={{ width: pct + '%', background: subj.color }}></div></div>
         <div className="meta" style={{ marginTop: 8, fontSize: 12 }}>
-          {remaining} min remaining · {Util.kindLabel(happening.kind)}
+          {remaining} min remaining  -  {Util.kindLabel(happening.kind)}
         </div>
       </div>
     );
@@ -99,8 +99,8 @@ function NowHero({ now }) {
     return (
       <div className="next-card">
         <div className="label">Up next</div>
-        <div className="title">{subj.code} · {next.summary.replace(/^(Lecture|Tutorial|Office hours) · /, '')}</div>
-        <div className="meta">{Util.fmtTime(next.start)} – {Util.fmtTime(next.end)} · {next.room}</div>
+        <div className="title">{subj.code}  -  {next.summary.replace(/^(Lecture|Tutorial|Office hours)  -  /, '')}</div>
+        <div className="meta">{Util.fmtTime(next.start)} - {Util.fmtTime(next.end)}  -  {next.room}</div>
         <div className="in">{Util.relTime(next.start, now)}</div>
       </div>
     );
@@ -118,7 +118,7 @@ function TodayList({ now }) {
   const today = Util.eventsForDay(now);
   return (
     <div className="today-list">
-      <h3>Today · {Util.fmtDayLong(now)}</h3>
+      <h3>Today  -  {Util.fmtDayLong(now)}</h3>
       {today.length === 0 && <div style={{ padding: '12px 22px', color: 'var(--ink-muted-48)', fontSize: 14 }}>Nothing scheduled.</div>}
       {today.map((e) => {
         const subj = Util.subjectById(e.subjectId);
@@ -131,8 +131,8 @@ function TodayList({ now }) {
             <div className="time">{Util.fmtTime(e.start)}</div>
             <div className="bar" style={{ background: subj.color }}></div>
             <div className="title">
-              {subj.code} · {e.summary.replace(/^(Lecture|Tutorial|Office hours) · /, '')}
-              <span className="sub">{isInstant ? `Due · ${Util.kindLabel(e.kind)}` : `${Util.kindLabel(e.kind)} · ${e.room}`}</span>
+              {subj.code}  -  {e.summary.replace(/^(Lecture|Tutorial|Office hours)  -  /, '')}
+              <span className="sub">{isInstant ? `Due  -  ${Util.kindLabel(e.kind)}` : `${Util.kindLabel(e.kind)}  -  ${e.room}`}</span>
             </div>
             <div className="right">{isInstant ? '' : Util.fmtTime(e.end)}</div>
           </div>
@@ -146,7 +146,7 @@ function TodayTimeline({ now }) {
   const today = Util.eventsForDay(now);
   return (
     <div className="today-tl">
-      <h3>Today · {Util.fmtDayLong(now)}</h3>
+      <h3>Today  -  {Util.fmtDayLong(now)}</h3>
       <div className="tl-rail">
         {today.length === 0 && <div style={{ color: 'var(--ink-muted-48)', fontSize: 14 }}>Nothing scheduled.</div>}
         {today.map((e) => {
@@ -159,8 +159,8 @@ function TodayTimeline({ now }) {
             <div key={e.subjectId + '-' + e.itemId} className={"tl-item" + (past ? " past" : "") + (cur ? " now" : "")}>
               <div className="tl-time">{Util.fmtTimeShort(e.start)}</div>
               <div className="tl-dot" style={{ borderColor: cur ? subj.color : (past ? undefined : subj.color), background: cur ? subj.color : undefined }}></div>
-              <div className="tl-title">{subj.code} · {e.summary.replace(/^(Lecture|Tutorial|Office hours) · /, '')}</div>
-              <div className="tl-sub">{Util.kindLabel(e.kind)} · {e.room}{isInstant ? '' : ` · until ${Util.fmtTimeShort(e.end)}`}</div>
+              <div className="tl-title">{subj.code}  -  {e.summary.replace(/^(Lecture|Tutorial|Office hours)  -  /, '')}</div>
+              <div className="tl-sub">{Util.kindLabel(e.kind)}  -  {e.room}{isInstant ? '' : `  -  until ${Util.fmtTimeShort(e.end)}`}</div>
             </div>
           );
         })}
@@ -184,8 +184,8 @@ function Deadlines({ now }) {
         return (
           <a key={e.subjectId + '-' + e.itemId} href={`#/subjects/${subj.id}`} className="deadline-row" style={{ color: 'inherit', textDecoration: 'none' }}>
             <div>
-              <div className="dr-title">{subj.code} · {e.summary}</div>
-              <div className="dr-sub">{Util.kindLabel(e.kind)} · {when}</div>
+              <div className="dr-title">{subj.code}  -  {e.summary}</div>
+              <div className="dr-sub">{Util.kindLabel(e.kind)}  -  {when}</div>
             </div>
             <div className={"dr-when" + (urgent ? " urgent" : "")}>{Util.relTime(e.start, now)}</div>
           </a>
@@ -201,7 +201,7 @@ function SyncPill() {
     return (
       <div className="sync-pill">
         <span className="dot" style={{ background: '#0066cc' }}></span>
-        Syncing…
+        Syncing...
       </div>
     );
   }
@@ -219,23 +219,75 @@ function SyncPill() {
   return (
     <div className="sync-pill">
       <span className="dot"></span>
-      Synced {t} · {s.itemsAddedLastRun} added
+      Synced {t}  -  {s.itemsAddedLastRun} added
     </div>
   );
+}
+
+// Phases the streamed POST /api/import/ical reports against. Rendered in
+// this order as a vertical checklist so the user sees what's happening.
+const ICAL_PHASES = [
+  { key: 'fetch',  label: 'Pull events from CourSys' },
+  { key: 'upsert', label: 'Sync to Google Calendar' },
+  { key: 'dedup',  label: 'Merge duplicate subjects' },
+];
+
+function PhaseRow({ label, state }) {
+  // state: { status: 'pending' | 'running' | 'done' | 'error', processed?, total?, detail? }
+  const pct = state.total
+    ? Math.round(((state.processed ?? 0) / state.total) * 100)
+    : (state.status === 'done' ? 100 : 0);
+  return (
+    <div className={`ical-phase ical-phase-${state.status}`}>
+      <div className="ical-phase-head">
+        <span className="ical-phase-dot" />
+        <span className="ical-phase-label">{label}</span>
+        <span className="ical-phase-detail">
+          {state.status === 'running' && state.total
+            ? `${state.processed ?? 0} / ${state.total}`
+            : state.status === 'done'
+              ? (state.detail ?? '+')
+              : state.status === 'error'
+                ? 'failed'
+                : ''}
+        </span>
+      </div>
+      <div className="ical-phase-bar"><div style={{ width: `${pct}%` }} /></div>
+    </div>
+  );
+}
+
+function emptyPhases() {
+  const out = {};
+  for (const p of ICAL_PHASES) out[p.key] = { status: 'pending' };
+  return out;
 }
 
 function IcalSubscriptionButton() {
   const [open, setOpen] = useState(false);
   const [url, setUrl] = useState('');
   const [loaded, setLoaded] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(false);     // any in-flight request
+  const [syncing, setSyncing] = useState(false); // streaming sync specifically
+  const [phases, setPhases] = useState(emptyPhases);
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
 
-  const close = () => { setOpen(false); setError(null); setResult(null); };
+  const close = () => {
+    // Lock the modal while a sync is in progress; only allow dismissal
+    // once the stream has emitted `done` (or an error).
+    if (syncing) return;
+    setOpen(false);
+    setError(null);
+    setResult(null);
+    setPhases(emptyPhases());
+  };
 
   const openModal = async () => {
     setOpen(true);
+    setResult(null);
+    setError(null);
+    setPhases(emptyPhases());
     if (!loaded) {
       try {
         const res = await fetch('/api/settings/ical-url');
@@ -268,20 +320,95 @@ function IcalSubscriptionButton() {
     }
   };
 
+  const applyEvent = (evt, setLocalPhases) => {
+    setLocalPhases((prev) => {
+      const next = { ...prev };
+      const cur = { ...(next[evt.stage] || { status: 'pending' }) };
+      if (evt.stage === 'fetch') {
+        if (evt.status === 'start') cur.status = 'running';
+        if (evt.status === 'done') { cur.status = 'done'; cur.detail = `${evt.fetched} events`; }
+      } else if (evt.stage === 'upsert') {
+        if (evt.status === 'start') { cur.status = 'running'; cur.total = evt.total; cur.processed = 0; }
+        if (evt.status === 'tick')  { cur.status = 'running'; cur.total = evt.total; cur.processed = evt.processed; }
+        if (evt.status === 'done')  {
+          cur.status = 'done';
+          cur.processed = cur.total;
+          cur.detail = `+${evt.inserted} new  -  ${evt.updated} updated  -  ${evt.unchanged} unchanged${evt.failures ? `  -  ${evt.failures} failed` : ''}`;
+        }
+      } else if (evt.stage === 'dedup') {
+        if (evt.status === 'analyzing') {
+          cur.status = 'running';
+          cur.processed = 0;
+          cur.total = 0;
+          cur.detail = 'agent analysing...';
+        }
+        if (evt.status === 'tick') {
+          cur.status = 'running';
+          cur.processed = evt.processed;
+          cur.total = evt.total;
+          cur.detail = `${evt.kind} merge: ${evt.detail ?? ''}`;
+        }
+        if (evt.status === 'done') {
+          cur.status = 'done';
+          const parts = [];
+          if (evt.subjectMerges) parts.push(`${evt.subjectMerges} subject${evt.subjectMerges === 1 ? '' : 's'}`);
+          if (evt.eventMerges) parts.push(`${evt.eventMerges} event${evt.eventMerges === 1 ? '' : 's'}`);
+          cur.detail = parts.length ? parts.join('  -  ') + ' merged' : 'no duplicates';
+        }
+      } else if (evt.stage === 'error') {
+        // Mark whichever stage was currently running as errored.
+        for (const k of Object.keys(next)) {
+          if (next[k].status === 'running') next[k] = { ...next[k], status: 'error' };
+        }
+        return next;
+      }
+      next[evt.stage] = cur;
+      return next;
+    });
+  };
+
   const syncNow = async () => {
     setBusy(true);
+    setSyncing(true);
     setError(null);
     setResult(null);
+    setPhases(emptyPhases());
     try {
       const res = await fetch('/api/import/ical', { method: 'POST' });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
-      setResult(body);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      let finalResult = null;
+      let streamError = null;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          let evt;
+          try { evt = JSON.parse(line); } catch { continue; }
+          if (evt.stage === 'done') finalResult = evt.result;
+          if (evt.stage === 'error') streamError = evt.message;
+          applyEvent(evt, setPhases);
+        }
+      }
+      if (streamError) throw new Error(streamError);
+      if (!finalResult) throw new Error('sync ended without a final result');
+      setResult(finalResult);
       await window.bootData();
     } catch (err) {
       setError(err.message || String(err));
     } finally {
       setBusy(false);
+      setSyncing(false);
     }
   };
 
@@ -290,32 +417,67 @@ function IcalSubscriptionButton() {
       <div className="modal import-result" onClick={(e) => e.stopPropagation()}>
         <header>
           <h2>CourSys iCal subscription</h2>
-          <button type="button" className="close" onClick={close} aria-label="Close">✕</button>
+          <button
+            type="button"
+            className="close"
+            onClick={close}
+            aria-label="Close"
+            disabled={syncing}
+            style={syncing ? { opacity: 0.3, cursor: 'not-allowed' } : undefined}
+          >x</button>
         </header>
         <div className="body">
           <p style={{ fontSize: 13, color: 'var(--ink-muted-80)', margin: '4px 0 12px' }}>
-            Paste the global iCal URL from CourSys. It's used as the default ingestion source on every pipeline run — events are attributed to subjects by their <code>CATEGORIES</code> field, and unrecognised course codes auto-create subjects.
+            Paste the global iCal URL from CourSys. Sync runs every pipeline tick and includes an automatic dedup pass so PDF- and iCal-created subjects collapse together.
           </p>
           <label style={{ display: 'block', fontSize: 12, color: 'var(--ink-muted-48)', marginBottom: 4 }}>iCal URL</label>
           <input
             type="url"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://coursys.sfu.ca/calendar/.../calendar.ics"
+            placeholder="https://coursys.sfu.ca/calendar/..."
+            disabled={syncing}
             style={{ width: '100%', padding: '8px 10px', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 13 }}
           />
-          {result && (
-            <div className="summary" style={{ marginTop: 14 }}>
-              Fetched {result.fetched} VEVENTs · attributed {result.attributed} · auto-created {result.subjectsCreated} subjects<br />
-              Events inserted: {result.eventsInserted} · updated: {result.eventsUpdated} · unchanged: {result.eventsUnchanged}
-              {result.failures > 0 ? ` · failures: ${result.failures}` : ''}
+
+          {(syncing || result) && (
+            <div className="ical-phases">
+              {ICAL_PHASES.map((p) => (
+                <PhaseRow key={p.key} label={p.label} state={phases[p.key]} />
+              ))}
             </div>
+          )}
+
+          {result && (
+            <>
+              <div className="summary" style={{ marginTop: 14 }}>
+                {result.fetched} VEVENTs fetched  -  {result.attributed} attributed
+                {result.subjectsCreated > 0 ? `  -  ${result.subjectsCreated} subjects auto-created` : ''}
+                {result.subjectMerges > 0 ? `  -  ${result.subjectMerges} subject${result.subjectMerges === 1 ? '' : 's'} merged` : ''}
+                {result.eventMerges > 0 ? `  -  ${result.eventMerges} event${result.eventMerges === 1 ? '' : 's'} merged` : ''}
+                {result.googleEventsDeleted > 0 ? `  -  ${result.googleEventsDeleted} stale Google events removed` : ''}
+                .
+              </div>
+              {result.dedupWarning && (
+                <div style={{
+                  marginTop: 10, padding: '8px 10px', borderRadius: 6,
+                  background: '#fff5e6', color: '#8a4b00', fontSize: 13,
+                  border: '1px solid #ffd6a8',
+                }}>
+                  <strong>Dedup agent warning:</strong> {result.dedupWarning}
+                </div>
+              )}
+            </>
           )}
           {error && <div className="form-error" style={{ marginTop: 12 }}>{error}</div>}
         </div>
         <footer className="modal-foot">
-          <button type="button" className="btn-ghost-pill" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save URL'}</button>
-          <button type="button" className="btn-primary" onClick={syncNow} disabled={busy || !url.trim()}>{busy ? 'Syncing…' : 'Sync now'}</button>
+          <button type="button" className="btn-ghost-pill" onClick={save} disabled={busy}>
+            {busy && !syncing ? 'Saving...' : 'Save URL'}
+          </button>
+          <button type="button" className="btn-primary" onClick={syncNow} disabled={busy || !url.trim()}>
+            {syncing ? 'Syncing...' : 'Sync now'}
+          </button>
         </footer>
       </div>
     </div>
@@ -369,7 +531,7 @@ function ImportSfuButton() {
       <div className="modal import-result" onClick={(e) => e.stopPropagation()}>
         <header>
           <h2>{error ? 'Import failed' : 'Schedule imported'}</h2>
-          <button type="button" className="close" onClick={close} aria-label="Close">✕</button>
+          <button type="button" className="close" onClick={close} aria-label="Close">x</button>
         </header>
         <div className="body">
           {error ? (
@@ -377,22 +539,22 @@ function ImportSfuButton() {
           ) : (
             <>
               <div className="term-line">
-                Term: <strong>{result.term.label}</strong> · {result.term.startDate} → {result.term.endDate}
+                Term: <strong>{result.term.label}</strong>  -  {result.term.startDate} -> {result.term.endDate}
               </div>
               <ul className="course-list">
                 {result.courses.map((c) => (
                   <li key={c.code}>
-                    <strong>{c.code}</strong> — {c.title}
+                    <strong>{c.code}</strong>  -  {c.title}
                     <div className="sub">
-                      {c.sections} section{c.sections === 1 ? '' : 's'} · {c.meetings} meeting{c.meetings === 1 ? '' : 's'}
+                      {c.sections} section{c.sections === 1 ? '' : 's'}  -  {c.meetings} meeting{c.meetings === 1 ? '' : 's'}
                     </div>
                   </li>
                 ))}
               </ul>
               <div className="summary">
-                Subjects created: {result.result.subjectsCreated} · merged: {result.result.subjectsMerged}<br />
-                Events inserted: {result.result.eventsInserted} · updated: {result.result.eventsUpdated} · unchanged: {result.result.eventsUnchanged}
-                {result.result.failures > 0 ? ` · failures: ${result.result.failures}` : ''}
+                Subjects created: {result.result.subjectsCreated}  -  merged: {result.result.subjectsMerged}<br />
+                Events inserted: {result.result.eventsInserted}  -  updated: {result.result.eventsUpdated}  -  unchanged: {result.result.eventsUnchanged}
+                {result.result.failures > 0 ? `  -  failures: ${result.result.failures}` : ''}
               </div>
             </>
           )}
@@ -422,7 +584,7 @@ function ImportSfuButton() {
         onClick={() => inputRef.current && inputRef.current.click()}
         disabled={busy}
       >
-        {busy ? 'Importing…' : 'Import SFU schedule'}
+        {busy ? 'Importing...' : 'Import SFU schedule'}
       </button>
       {/* Portal to body so the fixed-position backdrop isn't constrained by
           the sticky SubNav it lives in, which would push it down on scroll. */}
@@ -483,7 +645,7 @@ function SchedulePage({ now, tweaks, onSyncDone }) {
               className="btn-primary"
               onClick={handleSync}
               disabled={syncing || window.SYNC_STATUS.running}>
-              {syncing || window.SYNC_STATUS.running ? 'Syncing…' : 'Sync now'}
+              {syncing || window.SYNC_STATUS.running ? 'Syncing...' : 'Sync now'}
             </button>
           </>
         )}
@@ -496,9 +658,9 @@ function SchedulePage({ now, tweaks, onSyncDone }) {
               <div className="sub">Week of {weekStart.toLocaleDateString('en-US', { weekday: 'long' })}</div>
             </div>
             <div className="week-nav">
-              <button className="nav-btn" onClick={() => setWeekStart(Util.addDays(weekStart, -7))} aria-label="Previous week">‹</button>
+              <button className="nav-btn" onClick={() => setWeekStart(Util.addDays(weekStart, -7))} aria-label="Previous week">{'<'}</button>
               <button className="today-btn" onClick={() => setWeekStart(Util.startOfWeek(now))}>Today</button>
-              <button className="nav-btn" onClick={() => setWeekStart(Util.addDays(weekStart, 7))} aria-label="Next week">›</button>
+              <button className="nav-btn" onClick={() => setWeekStart(Util.addDays(weekStart, 7))} aria-label="Next week">{'>'}</button>
             </div>
           </div>
           <WeekGrid weekStart={weekStart} now={now} />

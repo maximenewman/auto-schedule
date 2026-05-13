@@ -25,8 +25,9 @@ import {
 } from './status.js';
 import { parseSchedulePdf } from '../import/sfuPdf.js';
 import { bootstrapFromSchedule } from '../import/bootstrap.js';
-import { syncIcalSubscription, ICAL_URL_SETTING } from '../import/icalSync.js';
-import { findDuplicateSubjects, mergeSubject } from '../import/dedup.js';
+import { syncIcalSubscription, runFullIcalSync, ICAL_URL_SETTING, type IcalProgress } from '../import/icalSync.js';
+import { mergeSubject, mergeEvent } from '../import/dedup.js';
+import { planDedup } from '../import/dedupAgent.js';
 import { getAuthorizedClient } from '../auth/google.js';
 import { listGoogleEvents } from '../sync/calendarRead.js';
 import type { OAuth2Client } from 'google-auth-library';
@@ -68,7 +69,7 @@ function readWindow(req: FastifyRequest): { fromISO?: string; toISO?: string } {
 export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
   // Lazy Google auth handle, shared across requests. Cached because building
   // an OAuth2Client + reading the token file on every /api/events call is
-  // wasteful — googleapis handles access-token refresh internally.
+  // wasteful  -  googleapis handles access-token refresh internally.
   let cachedAuth: OAuth2Client | null = null;
   async function getAuth(): Promise<OAuth2Client | null> {
     if (cachedAuth) return cachedAuth;
@@ -224,48 +225,77 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
     };
   });
 
-  app.get('/api/subjects/dedup', async () => {
-    return { suggestions: findDuplicateSubjects(loadSubjects(), ctx.store) };
+  app.get('/api/subjects/dedup', async (_req, reply) => {
+    // Ask the LLM for a dedup plan. Returned as-is so the UI can preview
+    // what would be merged before the user confirms.
+    const auth = await getAuth();
+    if (!auth) {
+      return reply.code(503).send({ error: 'google auth not set up' });
+    }
+    try {
+      const { plan } = await planDedup({ store: ctx.store, googleAuth: auth });
+      return plan;
+    } catch (err) {
+      logger.error({ err }, 'dedup: plan failed');
+      const msg = err instanceof Error ? err.message : String(err);
+      return reply.code(500).send({ error: msg });
+    }
   });
 
   app.post('/api/subjects/dedup', async (req, reply) => {
+    // Execute a plan  -  either the one supplied by the client or a fresh
+    // one from the agent if `auto: true`.
     const body = req.body as {
-      merges?: Array<{ fromId?: unknown; intoId?: unknown }>;
-      deleteGoogleEvents?: unknown;
+      auto?: unknown;
+      subjectMerges?: Array<{ fromId?: unknown; intoId?: unknown }>;
+      eventMerges?: Array<{ canonicalEventId?: unknown; redundantEventIds?: unknown }>;
     };
-    if (!Array.isArray(body?.merges) || body.merges.length === 0) {
-      return reply.code(400).send({ error: 'merges array is required' });
+    const auth = await getAuth();
+    if (!auth) {
+      return reply.code(503).send({ error: 'google auth not set up' });
     }
-    const deleteGoogleEvents = body.deleteGoogleEvents === true;
-    const auth = deleteGoogleEvents ? await getAuth() : null;
-    if (deleteGoogleEvents && !auth) {
-      return reply.code(503).send({ error: 'google auth not set up; cannot delete google events' });
-    }
-    const results = [];
-    for (const m of body.merges) {
-      const fromId = typeof m.fromId === 'string' ? m.fromId : '';
-      const intoId = typeof m.intoId === 'string' ? m.intoId : '';
-      if (!fromId || !intoId) {
-        return reply.code(400).send({ error: 'each merge needs fromId + intoId' });
+
+    let subjectMerges = (body.subjectMerges ?? []) as Array<{ fromId: string; intoId: string }>;
+    let eventMerges = (body.eventMerges ?? []) as Array<{ canonicalEventId: string; redundantEventIds: string[] }>;
+    if (body.auto === true) {
+      try {
+        const { plan } = await planDedup({ store: ctx.store, googleAuth: auth });
+        subjectMerges = plan.subjectMerges;
+        eventMerges = plan.eventMerges;
+      } catch (err) {
+        return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
       }
+    }
+
+    const summary = { subjectMerges: 0, eventMerges: 0, googleEventsDeleted: 0 };
+    for (const m of subjectMerges) {
+      if (typeof m.fromId !== 'string' || typeof m.intoId !== 'string') continue;
       try {
         const r = await mergeSubject({
-          fromId,
-          intoId,
-          store: ctx.store,
-          googleAuth: auth ?? undefined,
-          deleteGoogleEvents,
+          fromId: m.fromId, intoId: m.intoId,
+          store: ctx.store, googleAuth: auth, deleteGoogleEvents: true,
         });
-        results.push(r);
+        summary.subjectMerges++;
+        summary.googleEventsDeleted += r.googleEventsDeleted;
       } catch (err) {
-        logger.error({ err, fromId, intoId }, 'dedup: merge failed');
-        return reply.code(500).send({
-          error: err instanceof Error ? err.message : String(err),
-          completed: results,
-        });
+        logger.error({ err, m }, 'dedup: subject merge failed');
       }
     }
-    return { merges: results };
+    for (const m of eventMerges) {
+      if (typeof m.canonicalEventId !== 'string' || !Array.isArray(m.redundantEventIds)) continue;
+      try {
+        const r = await mergeEvent({
+          canonicalEventId: m.canonicalEventId,
+          redundantEventIds: m.redundantEventIds,
+          store: ctx.store, googleAuth: auth,
+        });
+        summary.eventMerges++;
+        summary.googleEventsDeleted += r.googleEventsDeleted;
+      } catch (err) {
+        logger.error({ err, m }, 'dedup: event merge failed');
+      }
+    }
+    return summary;
   });
 
   app.get('/api/settings/ical-url', async () => {
@@ -296,18 +326,32 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
     if (!url) {
       return reply.code(400).send({ error: 'no iCal URL configured' });
     }
+    const auth = await getAuth();
+    if (!auth) {
+      return reply.code(503).send({ error: 'google auth not set up' });
+    }
+    // Stream NDJSON so the dashboard can render a real progress bar
+    // through fetch + ReadableStream. Bypasses Fastify's serialiser via
+    // hijack()  -  we own the response from here on.
+    reply.hijack();
+    const raw = reply.raw;
+    raw.writeHead(200, {
+      'content-type': 'application/x-ndjson',
+      'cache-control': 'no-cache',
+      // Tell intermediaries (and the browser) not to buffer.
+      'x-accel-buffering': 'no',
+    });
+    const emit = (evt: IcalProgress) => {
+      raw.write(JSON.stringify(evt) + '\n');
+    };
     try {
-      const auth = await getAuth();
-      if (!auth) return reply.code(503).send({ error: 'google auth not set up' });
-      const result = await syncIcalSubscription(url, {
-        googleAuth: auth,
-        store: ctx.store,
-      });
-      return result;
+      await runFullIcalSync(url, { googleAuth: auth, store: ctx.store }, emit);
     } catch (err) {
       logger.error({ err }, 'import:ical failed');
-      const msg = err instanceof Error ? err.message : String(err);
-      return reply.code(500).send({ error: msg });
+      // runFullIcalSync already emits the error event before re-throwing;
+      // we just need to terminate the stream cleanly.
+    } finally {
+      raw.end();
     }
   });
 
@@ -399,7 +443,7 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
 
 /**
  * The cron runs at 08:00 and 20:00 local time (see README). Compute the next
- * occurrence from now so the UI can show "Next sync in …".
+ * occurrence from now so the UI can show "Next sync in ...".
  */
 function nextCronISO(now: Date = new Date()): string {
   const slots = [8, 20];

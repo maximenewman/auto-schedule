@@ -23,7 +23,7 @@ interface StoredCookies {
 export function loadCookies(): Cookie[] {
   if (!existsSync(COOKIE_PATH)) {
     throw new CourSysAuthError(
-      `no CourSys cookies at ${COOKIE_PATH} — run \`npm run setup:coursys\``,
+      `no CourSys cookies at ${COOKIE_PATH}  -  run \`npm run setup:coursys\``,
     );
   }
   const parsed = JSON.parse(readFileSync(COOKIE_PATH, 'utf8')) as StoredCookies;
@@ -56,7 +56,7 @@ export async function validateSession(page: Page): Promise<void> {
   const finalUrl = new URL(page.url());
   if (LOGIN_HOSTS.includes(finalUrl.hostname)) {
     throw new CourSysAuthError(
-      `CourSys redirected to ${finalUrl.hostname} — re-auth required`,
+      `CourSys redirected to ${finalUrl.hostname}  -  re-auth required`,
     );
   }
 }
@@ -70,7 +70,7 @@ export async function runCourSysSetup(): Promise<void> {
   try {
     const page = await browser.newPage();
     logger.info(
-      `opening ${HOME_URL} — log in via CAS, then return here. Cookies will be captured automatically.`,
+      `opening ${HOME_URL}  -  log in via CAS, then return here. Cookies will be captured automatically.`,
     );
     await page.goto(HOME_URL, { waitUntil: 'domcontentloaded' });
 
@@ -90,7 +90,7 @@ export async function runCourSysSetup(): Promise<void> {
     const cookies = await page.browser().cookies();
     const coursysCookies = cookies.filter((c) => c.domain.includes('coursys.sfu.ca'));
     if (coursysCookies.length === 0) {
-      throw new Error('no coursys.sfu.ca cookies captured — login may not have completed');
+      throw new Error('no coursys.sfu.ca cookies captured  -  login may not have completed');
     }
     saveCookies(coursysCookies);
     logger.info(

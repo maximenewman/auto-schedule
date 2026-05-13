@@ -60,19 +60,19 @@
       "sources": []
     },
     {
-      "id": "cmpt426d",
-      "code": "CMPT 426D",
-      "name": "CMPT 426D",
+      "id": "cmpt426",
+      "code": "CMPT 426",
+      "name": "CMPT 426",
       "professor": "TBD",
-      "destinationFolder": "downloads/CMPT 426D",
+      "destinationFolder": "downloads/CMPT 426",
       "sources": []
     },
     {
-      "id": "cmpt427d",
-      "code": "CMPT 427D",
-      "name": "CMPT 427D",
+      "id": "cmpt427",
+      "code": "CMPT 427",
+      "name": "CMPT 427",
       "professor": "TBD",
-      "destinationFolder": "downloads/CMPT 427D",
+      "destinationFolder": "downloads/CMPT 427",
       "sources": []
     }
   ]

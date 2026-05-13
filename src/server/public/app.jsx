@@ -88,7 +88,7 @@ function LoadingState({ error }) {
       <div style={{ color: '#7a7a7a', fontSize: 15 }}>
         {error
           ? <span style={{ color: '#d93025' }}>Failed to load: {String(error.message || error)}</span>
-          : 'Loading subjects, events, and pipeline status…'}
+          : 'Loading subjects, events, and pipeline status...'}
       </div>
     </div>
   );

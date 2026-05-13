@@ -98,7 +98,7 @@ function isNoise(line: string): boolean {
   if (line.startsWith('Note:')) return true;
   // SFU renders "Enrolled" / "Waitlisted" as a status badge that the PDF text
   // extractor breaks into "E Enrolled nrolled" (icon splits the word). Ignore
-  // — using these as instructor names is never right.
+  //  -  using these as instructor names is never right.
   if (/^[A-Z]\s+(Enrolled|Waitlisted)\s+\w+$/.test(line)) return true;
   if (/^(Enrolled|Waitlisted|Dropped)$/.test(line)) return true;
   return false;
@@ -290,7 +290,7 @@ export function parseScheduleText(text: string): SfuSchedule {
   // an earlier course may land in a later course's pool. We pool globally,
   // skip duplicates already owned by some section, and hand the remainder to
   // the lone empty section. When more than one section is empty, we'd need a
-  // stronger heuristic — log and leave alone for now.
+  // stronger heuristic  -  log and leave alone for now.
   const ownedKeys = new Set<string>();
   for (const c of courses) {
     for (const s of c.sections) {

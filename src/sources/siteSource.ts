@@ -77,7 +77,7 @@ export class SiteSource implements SourceFetcher {
       if (prior === hash) {
         logger.info(
           { subjectId: subject.id, url: source.url },
-          'site: content unchanged — skipping agent',
+          'site: content unchanged  -  skipping agent',
         );
         return [];
       }

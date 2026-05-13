@@ -3,22 +3,11 @@ import type { OAuth2Client } from 'google-auth-library';
 import {
   deleteSubject,
   loadSubjects,
-  type Subject,
 } from '../config/subjectsStore.js';
 import type { StateStore } from '../state/store.js';
 import { logger } from '../logger.js';
 
 const CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID ?? 'primary';
-const HIDDEN_IDS = new Set(['holidays']);
-
-export interface DedupSuggestion {
-  fromId: string;
-  intoId: string;
-  fromCode: string;
-  intoCode: string;
-  reason: string;
-  fromEventCount: number;
-}
 
 export interface MergeOptions {
   fromId: string;
@@ -41,54 +30,10 @@ export interface MergeResult {
   localSyncedEventsDeleted: number;
 }
 
-function normalize(s: string): string {
-  return s.replace(/\s+/g, '').toUpperCase();
-}
-
-/**
- * Detect pairs of subjects that almost certainly refer to the same course.
- *
- * Current heuristic: one subject's normalised id/code equals another's plus a
- * single trailing letter (the SFU section letter — D1, E1, etc.). This is
- * how iCal-created subjects collide with PDF-bootstrapped ones when an early
- * regex bug captured the section into the course number. The function is
- * deliberately conservative — it suggests merges, the user confirms.
- */
-export function findDuplicateSubjects(
-  subjects: Subject[],
-  store: StateStore,
-): DedupSuggestion[] {
-  const candidates = subjects.filter((s) => !HIDDEN_IDS.has(s.id));
-  const out: DedupSuggestion[] = [];
-
-  for (const a of candidates) {
-    for (const b of candidates) {
-      if (a.id === b.id) continue;
-      const aKey = normalize(a.code || a.id);
-      const bKey = normalize(b.code || b.id);
-      // a is canonical, b is duplicate if b == a + single letter.
-      if (bKey.length === aKey.length + 1 && bKey.startsWith(aKey)) {
-        // Already pushed in the other order? skip
-        if (out.some((s) => s.fromId === b.id && s.intoId === a.id)) continue;
-        const count = store.listCalendarItems({ subjectId: b.id }).length;
-        out.push({
-          fromId: b.id,
-          intoId: a.id,
-          fromCode: b.code || b.id,
-          intoCode: a.code || a.id,
-          reason: `"${bKey}" is "${aKey}" with a section letter — likely the same course.`,
-          fromEventCount: count,
-        });
-      }
-    }
-  }
-  return out;
-}
-
 /**
  * Merge one subject into another. Steps, in order:
  *   1. (optional) Delete every Google Calendar event whose id was derived
- *      from the duplicate subject — otherwise the next sync would create
+ *      from the duplicate subject  -  otherwise the next sync would create
  *      a fresh event under the canonical id alongside the orphan.
  *   2. Drop the local DB rows tied to the duplicate (calendar_items +
  *      synced_events). The next sync will recreate them under canonical
@@ -127,7 +72,7 @@ export async function mergeSubject(opts: MergeOptions): Promise<MergeResult> {
           (err as { code?: number; status?: number }).code ??
           (err as { status?: number }).status;
         if (status === 404 || status === 410) {
-          // Already gone — count as success for this audit's purposes.
+          // Already gone  -  count as success for this audit's purposes.
           result.googleEventsDeleted++;
         } else {
           result.googleDeleteFailures++;
@@ -145,5 +90,72 @@ export async function mergeSubject(opts: MergeOptions): Promise<MergeResult> {
   deleteSubject(fromId);
 
   logger.info(result, 'dedup: merge complete');
+  return result;
+}
+
+export interface MergeEventOptions {
+  canonicalEventId: string;
+  redundantEventIds: string[];
+  store: StateStore;
+  googleAuth: OAuth2Client;
+}
+
+export interface MergeEventResult {
+  canonicalEventId: string;
+  googleEventsDeleted: number;
+  googleDeleteFailures: number;
+  redirectsRecorded: number;
+  localRowsDeleted: number;
+}
+
+/**
+ * Collapse one or more redundant calendar events into a canonical one. For
+ * each redundant id we look up the local row that produced it (so we know
+ * which (subject_id, item_id) needs to be redirected), delete the Google
+ * event, drop the local rows, and record a redirect so the next sync routes
+ * that same (subject_id, item_id) into the canonical event instead of
+ * recreating the duplicate.
+ */
+export async function mergeEvent(opts: MergeEventOptions): Promise<MergeEventResult> {
+  const { canonicalEventId, redundantEventIds, store, googleAuth } = opts;
+  const calendar = google.calendar({ version: 'v3', auth: googleAuth });
+  const result: MergeEventResult = {
+    canonicalEventId,
+    googleEventsDeleted: 0,
+    googleDeleteFailures: 0,
+    redirectsRecorded: 0,
+    localRowsDeleted: 0,
+  };
+
+  for (const redundant of redundantEventIds) {
+    if (redundant === canonicalEventId) continue;
+    // Look up the local row so we know what (subject_id, item_id) to redirect.
+    const rows = store.listCalendarItems({}).filter((r) => r.eventId === redundant);
+    for (const row of rows) {
+      store.setEventRedirect(row.subjectId, row.itemId, canonicalEventId);
+      result.redirectsRecorded++;
+    }
+
+    try {
+      await calendar.events.delete({ calendarId: CALENDAR_ID, eventId: redundant });
+      result.googleEventsDeleted++;
+    } catch (err) {
+      const status =
+        (err as { code?: number; status?: number }).code ??
+        (err as { status?: number }).status;
+      if (status === 404 || status === 410) {
+        result.googleEventsDeleted++;
+      } else {
+        result.googleDeleteFailures++;
+        logger.warn({ err, eventId: redundant }, 'dedup: failed to delete google event');
+      }
+    }
+
+    // Local rows pointing at the redundant event id are no longer useful  - 
+    // the data lives on the canonical event going forward.
+    result.localRowsDeleted += store.deleteCalendarItemByEventId(redundant);
+  }
+
+  logger.info(result, 'dedup: event merge complete');
   return result;
 }

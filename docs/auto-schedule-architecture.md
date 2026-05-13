@@ -1,4 +1,4 @@
-# Auto-Schedule — Architecture
+# Auto-Schedule  -  Architecture
 
 Onboarding reference. Read this first before touching code. For setup + day-to-day
 usage, see the top-level `README.md`.
@@ -7,35 +7,35 @@ usage, see the top-level `README.md`.
 
 ```mermaid
 flowchart TB
-    Cron["⏱️ Scheduler<br/>Task Scheduler (Win) /<br/>cron (mac/Linux)<br/>08:00 & 20:00 daily"] --> Wrap["run.bat / run.sh<br/>(cd, PATH probe, LOG_FILE)"]
+    Cron["Scheduler<br/>Task Scheduler (Win) /<br/>cron (mac/Linux)<br/>08:00 & 20:00 daily"] --> Wrap["run.bat / run.sh<br/>(cd, PATH probe, LOG_FILE)"]
     Wrap --> Orch["Orchestrator<br/>(pipeline.ts)"]
-    Cfg[("📋 Config<br/>subjects.ts")] --> Orch
+    Cfg[("Config<br/>subjects.ts")] --> Orch
 
     Orch --> Loop{{"For each subject<br/>For each source"}}
 
-    Loop -->|type: email| Email["📧 Email Source<br/>Gmail API"]
-    Loop -->|type: site| Site["🌐 Site Source<br/>Puppeteer"]
+    Loop -->|type: email| Email["Email Source<br/>Gmail API"]
+    Loop -->|type: site| Site["Site Source<br/>Puppeteer"]
 
-    GAuth["🔑 Google OAuth<br/>(refresh token)"] --> Email
-    CAuth["🍪 CourSys Cookies<br/>(7-day session)"] --> Site
+    GAuth["Google OAuth<br/>(refresh token)"] --> Email
+    CAuth["CourSys Cookies<br/>(7-day session)"] --> Site
 
     Email <-->|fetch by label| GMail[("Gmail")]
     Site <-->|navigate + scrape| CourSys[("CourSys")]
 
-    Site -.->|auth fail| Notify["🔔 Notifier<br/>push + self-cal event"]
+    Site -.->|auth fail| Notify["Notifier<br/>push + self-cal event"]
 
-    DB[("💾 SQLite State<br/>seen IDs, hashes")]
+    DB[("SQLite State<br/>seen IDs, hashes")]
     DB -.->|dedup| Email
     DB -.->|hash compare| Site
 
-    Email --> Agent["🤖 LLM Agent<br/>generateObject + Zod"]
+    Email --> Agent["LLM Agent<br/>generateObject + Zod"]
     Site --> Agent
 
     Agent <--> OR[("OpenRouter API")]
 
     Agent -->|invalid| ErrLog["logs/agent-errors/"]
-    Agent -->|valid| CalSync["📅 Calendar Sync<br/>deterministic event IDs"]
-    Agent -->|valid| Files["📁 File Downloader<br/>SHA-256 dedup"]
+    Agent -->|valid| CalSync["Calendar Sync<br/>deterministic event IDs"]
+    Agent -->|valid| Files["File Downloader<br/>SHA-256 dedup"]
 
     CalSync -->|upsert| GCal[("Google Calendar")]
     Files -->|write| FS[("destinationFolder/")]
@@ -55,32 +55,32 @@ flowchart TB
 
 ## Component Responsibilities
 
-**Orchestrator (`pipeline.ts`)** — Top-level loop. Iterates subjects and sources, wires fetchers to the agent to the syncers, downloads attachments, and emits step-by-step breadcrumb logs (`→ subject`, `↳ source`, `→ asking agent`, etc.). Owns no business logic; just composition. A `CourSysAuthError` propagates out and aborts the whole run.
+**Orchestrator (`pipeline.ts`)**  -  Top-level loop. Iterates subjects and sources, wires fetchers to the agent to the syncers, downloads attachments, and emits step-by-step breadcrumb logs (`-> subject`, `   source`, `-> asking agent`, etc.). Owns no business logic; just composition. A `CourSysAuthError` propagates out and aborts the whole run.
 
-**Sources (`sources/`)** — Strategy pattern on `source.type`, dispatched by `FetcherRegistry`. Each fetcher returns normalized content + a list of candidate attachment refs. Sources ask the state store whether content is new before doing any work. The site fetcher reuses one headless Chromium across all subjects in a run; the registry closes it in the pipeline's `finally`.
+**Sources (`sources/`)**  -  Strategy pattern on `source.type`, dispatched by `FetcherRegistry`. Each fetcher returns normalized content + a list of candidate attachment refs. Sources ask the state store whether content is new before doing any work. The site fetcher reuses one headless Chromium across all subjects in a run; the registry closes it in the pipeline's `finally`.
 
-**Auth (`auth/`)** — `google.ts` wraps `googleapis` OAuth: an installed-app loopback flow on `http://127.0.0.1:53682/oauth2callback` writes the refresh token to `data/auth/google.json` (chmod 600 where supported); `googleapis` refreshes access tokens automatically thereafter. `coursys.ts` loads/saves cookies and validates by hitting an authed URL; on a redirect to `cas.sfu.ca` / `sso.sfu.ca` it throws a typed `CourSysAuthError` that the orchestrator catches and routes to the notifier.
+**Auth (`auth/`)**  -  `google.ts` wraps `googleapis` OAuth: an installed-app loopback flow on `http://127.0.0.1:53682/oauth2callback` writes the refresh token to `data/auth/google.json` (chmod 600 where supported); `googleapis` refreshes access tokens automatically thereafter. `coursys.ts` loads/saves cookies and validates by hitting an authed URL; on a redirect to `cas.sfu.ca` / `sso.sfu.ca` it throws a typed `CourSysAuthError` that the orchestrator catches and routes to the notifier.
 
-**Agent (`agent/`)** — Single `generateObject` call per source-with-new-content. Vercel AI SDK with the OpenAI provider pointed at OpenRouter's base URL. The Zod schema is the source of truth: the SDK serializes it to JSON Schema for the model and validates the response back to a typed object. Stateless. `attachments` is required (always `[]` when absent) so OpenAI strict structured outputs accept the schema. Invalid output is captured to `logs/agent-errors/<timestamp>__<subject>__<slug>.json` (with `responseBody`, `statusCode`, and `rawModelOutput`) but never written to Calendar. The model is `process.env.AGENT_MODEL` (default `openai/gpt-4o-mini`), `maxTokens` is 2000.
+**Agent (`agent/`)**  -  Single `generateObject` call per source-with-new-content. Vercel AI SDK with the OpenAI provider pointed at OpenRouter's base URL. The Zod schema is the source of truth: the SDK serializes it to JSON Schema for the model and validates the response back to a typed object. Stateless. `attachments` is required (always `[]` when absent) so OpenAI strict structured outputs accept the schema. Invalid output is captured to `logs/agent-errors/<timestamp>__<subject>__<slug>.json` (with `responseBody`, `statusCode`, and `rawModelOutput`) but never written to Calendar. The model is `process.env.AGENT_MODEL` (default `openai/gpt-4o-mini`), `maxTokens` is 2000.
 
-**Sync (`sync/`)** — `calendar.ts` upserts via deterministic IDs: `sanitizeEventId(subject.id, item.itemId)` produces a lowercase base32hex string that Google Calendar accepts as `events.update` or, on 404, `events.insert`. `files.ts` dispatches on URL scheme: `gmail://` refs are fetched via the Gmail attachment API with the live OAuth client; `http(s)://` URLs go through `fetch`, layering CourSys session cookies when the hostname matches. SHA-256 of bytes is checked against `downloaded_files` before writing, so re-downloads are free.
+**Sync (`sync/`)**  -  `calendar.ts` upserts via deterministic IDs: `sanitizeEventId(subject.id, item.itemId)` produces a lowercase base32hex string that Google Calendar accepts as `events.update` or, on 404, `events.insert`. `files.ts` dispatches on URL scheme: `gmail://` refs are fetched via the Gmail attachment API with the live OAuth client; `http(s)://` URLs go through `fetch`, layering CourSys session cookies when the hostname matches. SHA-256 of bytes is checked against `downloaded_files` before writing, so re-downloads are free.
 
-**State (`state/`)** — SQLite (WAL mode), four tables: `seen_emails`, `site_hashes`, `downloaded_files`, `synced_events`. Single source of truth for "have I done this before." Schema migrates on every boot via `CREATE TABLE IF NOT EXISTS`.
+**State (`state/`)**  -  SQLite (WAL mode), four tables: `seen_emails`, `site_hashes`, `downloaded_files`, `synced_events`. Single source of truth for "have I done this before." Schema migrates on every boot via `CREATE TABLE IF NOT EXISTS`.
 
-**Notifier (`notify/`)** — Push via ntfy (`NTFY_TOPIC`) or Pushover (`PUSHOVER_TOKEN` + `PUSHOVER_USER`); warns if neither is set. On `CourSysAuthError` it also upserts a "re-auth coursys" calendar event in the next 30-min slot (rounded up to the next 15-min boundary; pushed to tomorrow 09:00 if today is full) using a deterministic ID so retries don't spam the calendar.
+**Notifier (`notify/`)**  -  Push via ntfy (`NTFY_TOPIC`) or Pushover (`PUSHOVER_TOKEN` + `PUSHOVER_USER`); warns if neither is set. On `CourSysAuthError` it also upserts a "re-auth coursys" calendar event in the next 30-min slot (rounded up to the next 15-min boundary; pushed to tomorrow 09:00 if today is full) using a deterministic ID so retries don't spam the calendar.
 
-**Logger (`logger.ts`)** — pino with a multi-target transport: stdout (pretty, colorized in a TTY) plus a file (pretty, never colorized) when `LOG_FILE` is set. `LOG_JSON=1` flips both streams to raw JSON for a log aggregator. `LOG_LEVEL=debug` increases verbosity.
+**Logger (`logger.ts`)**  -  pino with a multi-target transport: stdout (pretty, colorized in a TTY) plus a file (pretty, never colorized) when `LOG_FILE` is set. `LOG_JSON=1` flips both streams to raw JSON for a log aggregator. `LOG_LEVEL=debug` increases verbosity.
 
 ## Data Flow Contracts
 
 ```
-Scheduler → run.bat/run.sh:    sets LOG_FILE, ensures node on PATH, exec node dist/index.js run
-Source → Orchestrator:         SourceItem { sourceItemId, content, attachments[], meta? }
-Orchestrator → Agent:          (subject, source, content) → CalendarEventList | null
-Agent → Orchestrator:          CalendarEventList   (Zod-validated)
-Orchestrator → Calendar:       upsertEvent(auth, subject.id, event, store)
-                                 → eventId = sanitizeEventId(subject.id, event.itemId)
-Orchestrator → Files:          downloadAttachment(attachment, destFolder, { googleAuth, store })
+Scheduler -> run.bat/run.sh:    sets LOG_FILE, ensures node on PATH, exec node dist/index.js run
+Source -> Orchestrator:         SourceItem { sourceItemId, content, attachments[], meta? }
+Orchestrator -> Agent:          (subject, source, content) -> CalendarEventList | null
+Agent -> Orchestrator:          CalendarEventList   (Zod-validated)
+Orchestrator -> Calendar:       upsertEvent(auth, subject.id, event, store)
+                                 -> eventId = sanitizeEventId(subject.id, event.itemId)
+Orchestrator -> Files:          downloadAttachment(attachment, destFolder, { googleAuth, store })
 ```
 
 ## Idempotency at a Glance
@@ -112,7 +112,7 @@ npm run build
 npm run run               # manual test
 ```
 
-Schedule via Windows Task Scheduler (`run.bat`) or cron (`run.sh`) — see the README.
+Schedule via Windows Task Scheduler (`run.bat`) or cron (`run.sh`)  -  see the README.
 
 ## Adding a New Subject
 
@@ -121,7 +121,7 @@ Schedule via Windows Task Scheduler (`run.bat`) or cron (`run.sh`) — see the R
 3. `destinationFolder` may be relative (resolved from the repo root) or absolute (`D:/Studies/cmpt307`). The path will be created on first download.
 4. Run `npm run build && npm run run` once manually to seed state and verify.
 
-No code changes required — the orchestrator is data-driven.
+No code changes required  -  the orchestrator is data-driven.
 
 ## Swapping the Agent Model
 
@@ -140,4 +140,4 @@ Re-run `npm run run` and check `logs/agent-errors/` is empty before re-enabling 
 | `LOG_FILE=path/to/file.log` | Mirror all output to this file (set automatically by `run.bat` / `run.sh`) |
 | `LOG_JSON=1` | Raw JSON on stdout and the file (for log aggregators) |
 | `LOG_LEVEL=debug` | More verbose breadcrumbs |
-| `AUTO_SCHEDULE_NO_JITTER=1` | Skip the 0–60 s startup jitter (the jitter is only useful for sub-hour schedules) |
+| `AUTO_SCHEDULE_NO_JITTER=1` | Skip the 0-60 s startup jitter (the jitter is only useful for sub-hour schedules) |

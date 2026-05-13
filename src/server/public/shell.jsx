@@ -16,12 +16,12 @@ function useHashRoute() {
 }
 
 function lastSyncLabel(status) {
-  if (status.running) return 'Syncing…';
+  if (status.running) return 'Syncing...';
   if (!status.lastRunISO) return 'No sync yet';
   const last = new Date(status.lastRunISO);
   const t = last.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: false });
   const added = status.itemsAddedLastRun;
-  return `Last sync ${t} · ${added} added`;
+  return `Last sync ${t}  -  ${added} added`;
 }
 
 function GlobalNav({ route }) {
@@ -56,7 +56,7 @@ function SubNav({ title, crumbs, right }) {
         <div className="crumbs">
           {crumbs.map((c, i) => (
             <React.Fragment key={i}>
-              {i > 0 && <span style={{ color: 'var(--ink-muted-32)' }}>›</span>}
+              {i > 0 && <span style={{ color: 'var(--ink-muted-32)' }}>></span>}
               {c.href ? <a href={c.href}>{c.label}</a> : <span>{c.label}</span>}
             </React.Fragment>
           ))}

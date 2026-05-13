@@ -8,7 +8,7 @@ const CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID ?? 'primary';
 const TIME_ZONE = 'America/Vancouver';
 
 /**
- * Google Calendar event IDs must be base32hex (a-v + 0-9), 5–1024 chars, lowercase.
+ * Google Calendar event IDs must be base32hex (a-v + 0-9), 5-1024 chars, lowercase.
  * We normalize subject.id + itemId to that alphabet so the same item always
  * collides with itself across runs (upsert) and never with anything else.
  */
@@ -23,11 +23,11 @@ export function sanitizeEventId(subjectId: string, itemId: string): string {
       if (ch === 'x') return 'b0';
       if (ch === 'y') return 'c0';
       if (ch === 'z') return 'd0';
-      // Everything else (spaces, punctuation) → '0'.
+      // Everything else (spaces, punctuation) -> '0'.
       return '0';
     })
     .join('');
-  // Squeeze any runs that became >1 zero, and trim leading zeros (must still be ≥5 chars).
+  // Squeeze any runs that became >1 zero, and trim leading zeros (must still be >= 5 chars).
   const compact = mapped.replace(/0{2,}/g, '0');
   return compact.length < 5 ? compact.padEnd(5, '0') : compact;
 }
@@ -59,8 +59,8 @@ function isEmpty(s: string | null | undefined): boolean {
 }
 
 /** Build a patch body containing only fields where the existing event has no
- *  value. Anything the user has typed by hand on the calendar — a room change,
- *  a renamed summary, an added note — survives subsequent runs. */
+ *  value. Anything the user has typed by hand on the calendar  -  a room change,
+ *  a renamed summary, an added note  -  survives subsequent runs. */
 function buildFillOnlyPatch(
   existing: calendar_v3.Schema$Event,
   next: calendar_v3.Schema$Event,
@@ -98,7 +98,12 @@ export async function upsertEvent(
   sourceLabel?: string,
 ): Promise<{ eventId: string; action: 'inserted' | 'updated' | 'noop' }> {
   const calendar = google.calendar({ version: 'v3', auth });
-  const eventId = sanitizeEventId(subjectId, event.itemId);
+  // The dedup agent records a redirect when it merges two events that came
+  // from different sources (e.g. an iCal D1 lecture into a PDF LEC). Re-run
+  // syncs honour that redirect so the same merge doesn't have to happen
+  // again on every poll.
+  const redirect = store?.getEventRedirect(subjectId, event.itemId);
+  const eventId = redirect ?? sanitizeEventId(subjectId, event.itemId);
   const resource = toCalendarResource(event);
 
   const recordLocal = () => {

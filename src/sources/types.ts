@@ -8,7 +8,7 @@ export interface AttachmentRef {
 }
 
 export interface SourceItem {
-  /** Stable per-source identifier — Gmail message ID or normalized site URL. */
+  /** Stable per-source identifier  -  Gmail message ID or normalized site URL. */
   sourceItemId: string;
   /** Normalized text the agent will reason over. */
   content: string;

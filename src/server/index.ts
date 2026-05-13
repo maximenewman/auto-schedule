@@ -47,7 +47,7 @@ async function main(): Promise<void> {
     index: ['index.html'],
   });
 
-  // SPA fallback: anything not under /api and not a file → index.html
+  // SPA fallback: anything not under /api and not a file -> index.html
   app.setNotFoundHandler((req, reply) => {
     if (req.url.startsWith('/api')) {
       return reply.code(404).send({ error: 'not found' });
@@ -56,7 +56,7 @@ async function main(): Promise<void> {
   });
 
   process.on('SIGINT', async () => {
-    logger.info('SIGINT — shutting down');
+    logger.info('SIGINT  -  shutting down');
     await app.close();
     store.close();
     process.exit(0);

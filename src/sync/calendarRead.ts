@@ -16,7 +16,7 @@ export interface ListEventsOptions {
  * Read events directly from Google Calendar. The local SQLite cache is used
  * only to enrich each Google event with the subjectId/itemId/kind metadata
  * that lives outside Google. Anything Google has but the local DB doesn't
- * (e.g. user-added events) is skipped — the dashboard only shows events
+ * (e.g. user-added events) is skipped  -  the dashboard only shows events
  * tied to managed subjects.
  *
  * `singleEvents: true` asks Google to expand recurring events into their
@@ -51,7 +51,7 @@ export async function listGoogleEvents(
   } while (pageToken);
 
   // Build a lookup: every locally-known event id (master event id for
-  // recurrences) → metadata we need to attach.
+  // recurrences) -> metadata we need to attach.
   const localRows = store.listCalendarItems(
     opts.subjectId ? { subjectId: opts.subjectId } : {},
   );
@@ -78,7 +78,7 @@ export async function listGoogleEvents(
       subjectId: local.subjectId,
       itemId: local.itemId,
       kind: local.kind,
-      // Prefer the Google value — if the user edited it on Google, we
+      // Prefer the Google value  -  if the user edited it on Google, we
       // surface that. Fall back to the local cache when Google has nothing.
       summary: ev.summary ?? local.summary,
       description: ev.description ?? local.description,
