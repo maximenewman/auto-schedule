@@ -3,12 +3,20 @@ import { spawn } from 'node:child_process';
 import { basename, resolve as resolvePath } from 'node:path';
 import { statSync, existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { ZodError } from 'zod';
 import { StateStore } from '../state/store.js';
 import {
-  subjects,
+  loadSubjects,
+  findSubject,
+  createSubject,
+  updateSubject,
+  deleteSubject,
   colorForSubject,
+  NotFoundError,
+  ConflictError,
+  ValidationError,
   type Subject,
-} from '../config/subjects.js';
+} from '../config/subjectsStore.js';
 import {
   countRecentAgentErrors,
   googleAuthExists,
@@ -45,10 +53,6 @@ function serializeSubject(s: Subject) {
   };
 }
 
-function findSubject(id: string): Subject | undefined {
-  return subjects.find((s) => s.id === id);
-}
-
 function readWindow(req: FastifyRequest): { fromISO?: string; toISO?: string } {
   const q = req.query as { from?: string; to?: string };
   return { fromISO: q.from, toISO: q.to };
@@ -57,7 +61,7 @@ function readWindow(req: FastifyRequest): { fromISO?: string; toISO?: string } {
 export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
   app.get('/api/subjects', async () => {
     const now = new Date().toISOString();
-    return subjects.map((s) => {
+    return loadSubjects().map((s) => {
       const events = ctx.store.listCalendarItems({ subjectId: s.id, fromISO: now });
       const upcomingDeadlines = events.filter(
         (e) => e.kind === 'assignment' || e.kind === 'midterm' || e.kind === 'exam',
@@ -87,6 +91,35 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
       ...serializeSubject(subject),
       nextEvent,
     };
+  });
+
+  app.post('/api/subjects', async (req, reply) => {
+    try {
+      const created = createSubject(req.body);
+      return reply.code(201).send(serializeSubject(created));
+    } catch (err) {
+      return mapMutationError(err, reply);
+    }
+  });
+
+  app.put('/api/subjects/:id', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    try {
+      const updated = updateSubject(id, req.body);
+      return serializeSubject(updated);
+    } catch (err) {
+      return mapMutationError(err, reply);
+    }
+  });
+
+  app.delete('/api/subjects/:id', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    try {
+      deleteSubject(id);
+      return reply.code(204).send();
+    } catch (err) {
+      return mapMutationError(err, reply);
+    }
   });
 
   app.get('/api/events', async (req) => {
@@ -216,6 +249,25 @@ function nextCronISO(now: Date = new Date()): string {
   }
   candidates.sort((a, b) => a.getTime() - b.getTime());
   return candidates[0]!.toISOString();
+}
+
+function mapMutationError(err: unknown, reply: FastifyReply) {
+  if (err instanceof ZodError) {
+    return reply.code(400).send({
+      error: 'validation_failed',
+      issues: err.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+    });
+  }
+  if (err instanceof ValidationError) {
+    return reply.code(400).send({ error: err.message });
+  }
+  if (err instanceof NotFoundError) {
+    return reply.code(404).send({ error: err.message });
+  }
+  if (err instanceof ConflictError) {
+    return reply.code(409).send({ error: err.message });
+  }
+  throw err;
 }
 
 export { makeRunState };

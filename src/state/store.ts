@@ -250,6 +250,10 @@ export class StateStore {
   }
 
   listDownloadedFilesByPathPrefix(prefix: string): DownloadedFileRow[] {
+    // Stored paths use the OS-native separator (backslash on Windows) but
+    // destinationFolder in subjects is forward-slashed. Normalize both sides
+    // so the prefix match doesn't care which separator was used.
+    const normalizedPrefix = prefix.replace(/\\/g, '/').replace(/\/+$/, '');
     const rows = this.db
       .prepare(
         `SELECT
@@ -257,10 +261,10 @@ export class StateStore {
             path           AS path,
             downloaded_at  AS downloadedAt
           FROM downloaded_files
-          WHERE path LIKE ?
+          WHERE REPLACE(path, '\\', '/') LIKE ?
           ORDER BY downloaded_at DESC`,
       )
-      .all(`${prefix}%`) as DownloadedFileRow[];
+      .all(`${normalizedPrefix}/%`) as DownloadedFileRow[];
     return rows;
   }
 

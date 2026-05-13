@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { logger } from './logger.js';
 import { StateStore } from './state/store.js';
-import { subjects } from './config/subjects.js';
+import { loadSubjects } from './config/subjectsStore.js';
 import { runGoogleSetup, getAuthorizedClient } from './auth/google.js';
 import { runCourSysSetup, CourSysAuthError } from './auth/coursys.js';
 import { upsertEvent } from './sync/calendar.js';
@@ -47,6 +47,7 @@ async function maybeJitter(command: Command): Promise<void> {
 async function main(): Promise<void> {
   const command = parseCommand(process.argv);
   await maybeJitter(command);
+  const subjects = loadSubjects();
   logger.info(
     { command, subjectCount: subjects.length, pid: process.pid },
     'auto-schedule starting',
