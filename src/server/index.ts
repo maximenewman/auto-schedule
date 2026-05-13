@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
+import fastifyMultipart from '@fastify/multipart';
 import { resolve, dirname } from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -31,6 +32,10 @@ async function main(): Promise<void> {
   app.addHook('onRequest', (req, _reply, done) => {
     logger.info({ method: req.method, url: req.url }, 'http');
     done();
+  });
+
+  await app.register(fastifyMultipart, {
+    limits: { fileSize: 10 * 1024 * 1024, files: 1 },
   });
 
   registerRoutes(app, { store, runState });

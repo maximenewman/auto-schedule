@@ -224,6 +224,108 @@ function SyncPill() {
   );
 }
 
+function ImportSfuButton() {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+  const inputRef = React.useRef(null);
+
+  const close = () => { setResult(null); setError(null); };
+
+  const handleFile = async (file) => {
+    close();
+    const baseFolder = window.prompt(
+      'Base folder for class file downloads (subjects will be created as <base>/<COURSE CODE>):',
+      window.localStorage.getItem('sfuImportBaseFolder') || 'downloads',
+    );
+    if (baseFolder == null) return;
+    window.localStorage.setItem('sfuImportBaseFolder', baseFolder);
+
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append('pdf', file, file.name);
+      fd.append('baseFolder', baseFolder);
+      const res = await fetch('/api/import/sfu', { method: 'POST', body: fd });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      setResult(body);
+      await window.bootData();
+    } catch (err) {
+      setError(err.message || String(err));
+    } finally {
+      setBusy(false);
+      if (inputRef.current) inputRef.current.value = '';
+    }
+  };
+
+  const modal = (result || error) ? (
+    <div className="modal-backdrop" onClick={close}>
+      <div className="modal import-result" onClick={(e) => e.stopPropagation()}>
+        <header>
+          <h2>{error ? 'Import failed' : 'Schedule imported'}</h2>
+          <button type="button" className="close" onClick={close} aria-label="Close">✕</button>
+        </header>
+        <div className="body">
+          {error ? (
+            <div className="form-error">{error}</div>
+          ) : (
+            <>
+              <div className="term-line">
+                Term: <strong>{result.term.label}</strong> · {result.term.startDate} → {result.term.endDate}
+              </div>
+              <ul className="course-list">
+                {result.courses.map((c) => (
+                  <li key={c.code}>
+                    <strong>{c.code}</strong> — {c.title}
+                    <div className="sub">
+                      {c.sections} section{c.sections === 1 ? '' : 's'} · {c.meetings} meeting{c.meetings === 1 ? '' : 's'}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              <div className="summary">
+                Subjects created: {result.result.subjectsCreated} · merged: {result.result.subjectsMerged}<br />
+                Events inserted: {result.result.eventsInserted} · updated: {result.result.eventsUpdated} · unchanged: {result.result.eventsUnchanged}
+                {result.result.failures > 0 ? ` · failures: ${result.result.failures}` : ''}
+              </div>
+            </>
+          )}
+        </div>
+        <footer className="modal-foot">
+          <button type="button" className="btn-primary" onClick={close}>Done</button>
+        </footer>
+      </div>
+    </div>
+  ) : null;
+
+  return (
+    <>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="application/pdf,.pdf"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const f = e.target.files && e.target.files[0];
+          if (f) handleFile(f);
+        }}
+      />
+      <button
+        type="button"
+        className="btn-ghost-pill"
+        onClick={() => inputRef.current && inputRef.current.click()}
+        disabled={busy}
+      >
+        {busy ? 'Importing…' : 'Import SFU schedule'}
+      </button>
+      {/* Portal to body so the fixed-position backdrop isn't constrained by
+          the sticky SubNav it lives in, which would push it down on scroll. */}
+      {modal && ReactDOM.createPortal(modal, document.body)}
+    </>
+  );
+}
+
 function SchedulePage({ now, tweaks, onSyncDone }) {
   const [weekStart, setWeekStart] = useState(() => Util.startOfWeek(now));
   const [syncing, setSyncing] = useState(false);
@@ -269,6 +371,7 @@ function SchedulePage({ now, tweaks, onSyncDone }) {
         right={(
           <>
             <SyncPill />
+            <ImportSfuButton />
             <button className="btn-ghost-pill" onClick={() => window.location.hash = '#/subjects'}>Subjects</button>
             <button
               className="btn-primary"

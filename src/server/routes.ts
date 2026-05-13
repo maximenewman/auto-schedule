@@ -23,6 +23,11 @@ import {
   coursysCookieAge,
   type SyncStatus,
 } from './status.js';
+import { parseSchedulePdf } from '../import/sfuPdf.js';
+import { bootstrapFromSchedule } from '../import/bootstrap.js';
+import { getAuthorizedClient } from '../auth/google.js';
+import { listGoogleEvents } from '../sync/calendarRead.js';
+import type { OAuth2Client } from 'google-auth-library';
 import { logger } from '../logger.js';
 
 interface RouteCtx {
@@ -59,11 +64,38 @@ function readWindow(req: FastifyRequest): { fromISO?: string; toISO?: string } {
 }
 
 export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
+  // Lazy Google auth handle, shared across requests. Cached because building
+  // an OAuth2Client + reading the token file on every /api/events call is
+  // wasteful — googleapis handles access-token refresh internally.
+  let cachedAuth: OAuth2Client | null = null;
+  async function getAuth(): Promise<OAuth2Client | null> {
+    if (cachedAuth) return cachedAuth;
+    try {
+      cachedAuth = await getAuthorizedClient();
+      return cachedAuth;
+    } catch (err) {
+      logger.warn({ err: (err as Error).message }, 'google auth unavailable');
+      return null;
+    }
+  }
+  async function readEvents(opts: { fromISO?: string; toISO?: string; subjectId?: string }) {
+    const auth = await getAuth();
+    if (!auth) return [];
+    try {
+      return await listGoogleEvents(auth, ctx.store, opts);
+    } catch (err) {
+      logger.error({ err }, 'google calendar read failed');
+      return [];
+    }
+  }
+
   app.get('/api/subjects', async () => {
     const now = new Date().toISOString();
-    return loadSubjects().map((s) => {
-      const events = ctx.store.listCalendarItems({ subjectId: s.id, fromISO: now });
-      const upcomingDeadlines = events.filter(
+    const subjects = loadSubjects();
+    const events = await readEvents({ fromISO: now });
+    return subjects.map((s) => {
+      const subjectEvents = events.filter((e) => e.subjectId === s.id);
+      const upcomingDeadlines = subjectEvents.filter(
         (e) => e.kind === 'assignment' || e.kind === 'midterm' || e.kind === 'exam',
       );
       const files = ctx.store.listDownloadedFilesByPathPrefix(
@@ -85,7 +117,7 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
     const subject = findSubject(id);
     if (!subject) return reply.code(404).send({ error: 'not found' });
     const nowISO = new Date().toISOString();
-    const upcoming = ctx.store.listCalendarItems({ subjectId: id, fromISO: nowISO });
+    const upcoming = await readEvents({ subjectId: id, fromISO: nowISO });
     const nextEvent = upcoming[0] ?? null;
     return {
       ...serializeSubject(subject),
@@ -124,14 +156,14 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
 
   app.get('/api/events', async (req) => {
     const { fromISO, toISO } = readWindow(req);
-    return ctx.store.listCalendarItems({ fromISO, toISO });
+    return readEvents({ fromISO, toISO });
   });
 
   app.get('/api/subjects/:id/events', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!findSubject(id)) return reply.code(404).send({ error: 'not found' });
     const { fromISO, toISO } = readWindow(req);
-    return ctx.store.listCalendarItems({ subjectId: id, fromISO, toISO });
+    return readEvents({ subjectId: id, fromISO, toISO });
   });
 
   app.get('/api/subjects/:id/files', async (req, reply) => {
@@ -188,6 +220,53 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
       running: ctx.runState.current,
       lastRun: ctx.runState.lastRun,
     };
+  });
+
+  app.post('/api/import/sfu', async (req, reply) => {
+    if (!req.isMultipart()) {
+      return reply.code(400).send({ error: 'expected multipart/form-data with a "pdf" file' });
+    }
+    let pdfBuf: Buffer | null = null;
+    let pdfName: string | null = null;
+    let baseFolder: string | null = null;
+    for await (const part of req.parts()) {
+      if (part.type === 'file' && part.fieldname === 'pdf') {
+        pdfBuf = await part.toBuffer();
+        pdfName = part.filename ?? 'schedule.pdf';
+      } else if (part.type === 'field' && part.fieldname === 'baseFolder') {
+        baseFolder = String(part.value ?? '').trim();
+      }
+    }
+    if (!pdfBuf) {
+      return reply.code(400).send({ error: 'missing "pdf" file in form' });
+    }
+    if (!baseFolder) {
+      baseFolder = process.env.AUTO_SCHEDULE_BASE_FOLDER ?? 'downloads';
+    }
+    try {
+      const schedule = await parseSchedulePdf(pdfBuf);
+      const googleAuth = await getAuthorizedClient();
+      const result = await bootstrapFromSchedule(schedule, {
+        baseFolder,
+        googleAuth,
+        store: ctx.store,
+        sourceLabel: `pdf:${pdfName}`,
+      });
+      return {
+        term: schedule.term,
+        courses: schedule.courses.map((c) => ({
+          code: c.code,
+          title: c.title,
+          sections: c.sections.length,
+          meetings: c.sections.reduce((n, s) => n + s.meetings.length, 0),
+        })),
+        result,
+      };
+    } catch (err) {
+      logger.error({ err }, 'import:sfu failed');
+      const msg = err instanceof Error ? err.message : String(err);
+      return reply.code(500).send({ error: msg });
+    }
   });
 
   app.post('/api/sync', async (_req, reply) => {

@@ -36,6 +36,12 @@ export const CalendarEventSchema = z.object({
   attachments: z
     .array(AttachmentSchema)
     .describe('Attachments referenced by this event. Emit [] if none.'),
+  recurrence: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Optional iCalendar RRULE strings, e.g. ["RRULE:FREQ=WEEKLY;BYDAY=TU;UNTIL=20260811T065959Z"]. Used for class meetings; leave undefined for one-off events.',
+    ),
 });
 
 export const CalendarEventListSchema = z.object({

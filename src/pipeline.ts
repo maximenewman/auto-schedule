@@ -102,7 +102,9 @@ async function processSource(
       { contentChars: item.content.length, attachments: item.attachments.length },
       '      → asking agent to extract events',
     );
-    const extracted = await extractEvents(subject, source, item.content);
+    const extracted = await extractEvents(subject, source, item.content, {
+      store: ctx.store,
+    });
     if (!extracted) {
       log.warn('      ✗ agent returned no object; skipping item (raw output logged)');
       continue;
