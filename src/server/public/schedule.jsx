@@ -224,6 +224,111 @@ function SyncPill() {
   );
 }
 
+function IcalSubscriptionButton() {
+  const [open, setOpen] = useState(false);
+  const [url, setUrl] = useState('');
+  const [loaded, setLoaded] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [result, setResult] = useState(null);
+
+  const close = () => { setOpen(false); setError(null); setResult(null); };
+
+  const openModal = async () => {
+    setOpen(true);
+    if (!loaded) {
+      try {
+        const res = await fetch('/api/settings/ical-url');
+        const body = await res.json();
+        setUrl(body.url ?? '');
+      } catch (err) {
+        setError(err.message || String(err));
+      } finally {
+        setLoaded(true);
+      }
+    }
+  };
+
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/settings/ical-url', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ url: url.trim() }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      setUrl(body.url ?? '');
+    } catch (err) {
+      setError(err.message || String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const syncNow = async () => {
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const res = await fetch('/api/import/ical', { method: 'POST' });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      setResult(body);
+      await window.bootData();
+    } catch (err) {
+      setError(err.message || String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const modal = open ? (
+    <div className="modal-backdrop" onClick={close}>
+      <div className="modal import-result" onClick={(e) => e.stopPropagation()}>
+        <header>
+          <h2>CourSys iCal subscription</h2>
+          <button type="button" className="close" onClick={close} aria-label="Close">✕</button>
+        </header>
+        <div className="body">
+          <p style={{ fontSize: 13, color: 'var(--ink-muted-80)', margin: '4px 0 12px' }}>
+            Paste the global iCal URL from CourSys. It's used as the default ingestion source on every pipeline run — events are attributed to subjects by their <code>CATEGORIES</code> field, and unrecognised course codes auto-create subjects.
+          </p>
+          <label style={{ display: 'block', fontSize: 12, color: 'var(--ink-muted-48)', marginBottom: 4 }}>iCal URL</label>
+          <input
+            type="url"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://coursys.sfu.ca/calendar/.../calendar.ics"
+            style={{ width: '100%', padding: '8px 10px', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 13 }}
+          />
+          {result && (
+            <div className="summary" style={{ marginTop: 14 }}>
+              Fetched {result.fetched} VEVENTs · attributed {result.attributed} · auto-created {result.subjectsCreated} subjects<br />
+              Events inserted: {result.eventsInserted} · updated: {result.eventsUpdated} · unchanged: {result.eventsUnchanged}
+              {result.failures > 0 ? ` · failures: ${result.failures}` : ''}
+            </div>
+          )}
+          {error && <div className="form-error" style={{ marginTop: 12 }}>{error}</div>}
+        </div>
+        <footer className="modal-foot">
+          <button type="button" className="btn-ghost-pill" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save URL'}</button>
+          <button type="button" className="btn-primary" onClick={syncNow} disabled={busy || !url.trim()}>{busy ? 'Syncing…' : 'Sync now'}</button>
+        </footer>
+      </div>
+    </div>
+  ) : null;
+
+  return (
+    <>
+      <button type="button" className="btn-ghost-pill" onClick={openModal}>iCal subscription</button>
+      {modal && ReactDOM.createPortal(modal, document.body)}
+    </>
+  );
+}
+
 function ImportSfuButton() {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
@@ -371,6 +476,7 @@ function SchedulePage({ now, tweaks, onSyncDone }) {
         right={(
           <>
             <SyncPill />
+            <IcalSubscriptionButton />
             <ImportSfuButton />
             <button className="btn-ghost-pill" onClick={() => window.location.hash = '#/subjects'}>Subjects</button>
             <button

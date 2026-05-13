@@ -7,6 +7,7 @@ import { upsertEvent } from './sync/calendar.js';
 import { downloadAttachment } from './sync/files.js';
 import { logger } from './logger.js';
 import { CourSysAuthError } from './auth/coursys.js';
+import { syncIcalSubscription, ICAL_URL_SETTING } from './import/icalSync.js';
 
 export interface RunContext {
   googleAuth: OAuth2Client;
@@ -33,6 +34,27 @@ export async function runPipeline(
     failures: 0,
   };
   const registry = new FetcherRegistry(ctx);
+
+  // iCal subscription is the default ingestion path — if a global CourSys
+  // iCal URL is saved, sync it first so any auto-created subjects exist
+  // before the per-subject email/site loop runs.
+  const icalUrl = ctx.store.getSetting(ICAL_URL_SETTING);
+  if (icalUrl) {
+    try {
+      const r = await syncIcalSubscription(icalUrl, {
+        googleAuth: ctx.googleAuth,
+        store: ctx.store,
+      });
+      summary.eventsUpserted += r.eventsInserted + r.eventsUpdated;
+      summary.itemsProcessed += r.fetched;
+      summary.failures += r.failures;
+    } catch (err) {
+      summary.failures++;
+      logger.error({ err }, 'ical: sync failed — continuing with per-subject sources');
+    }
+  } else {
+    logger.info('ical: no URL configured — skipping');
+  }
 
   try {
     for (const subject of subjects) {

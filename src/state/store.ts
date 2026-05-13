@@ -106,6 +106,12 @@ export class StateStore {
         ON calendar_items(subject_id, start_iso);
       CREATE INDEX IF NOT EXISTS idx_calendar_items_start
         ON calendar_items(start_iso);
+
+      CREATE TABLE IF NOT EXISTS user_settings (
+        key        TEXT PRIMARY KEY,
+        value      TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
     `);
     // Idempotent column add — `ALTER TABLE ADD COLUMN` errors if the column
     // already exists, so check first.
@@ -284,6 +290,41 @@ export class StateStore {
       )
       .all(`${normalizedPrefix}/%`) as DownloadedFileRow[];
     return rows;
+  }
+
+  deleteCalendarItemsForSubject(subjectId: string): number {
+    const info = this.db
+      .prepare('DELETE FROM calendar_items WHERE subject_id = ?')
+      .run(subjectId);
+    return Number(info.changes ?? 0);
+  }
+
+  deleteSyncedEventsForSubject(subjectId: string): number {
+    const info = this.db
+      .prepare('DELETE FROM synced_events WHERE subject_id = ?')
+      .run(subjectId);
+    return Number(info.changes ?? 0);
+  }
+
+  getSetting(key: string): string | null {
+    const row = this.db
+      .prepare('SELECT value FROM user_settings WHERE key = ?')
+      .get(key) as { value: string } | undefined;
+    return row?.value ?? null;
+  }
+
+  setSetting(key: string, value: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO user_settings (key, value, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+      )
+      .run(key, value, new Date().toISOString());
+  }
+
+  deleteSetting(key: string): void {
+    this.db.prepare('DELETE FROM user_settings WHERE key = ?').run(key);
   }
 
   /** For the UI status block. */
