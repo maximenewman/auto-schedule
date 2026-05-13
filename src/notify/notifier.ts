@@ -109,8 +109,10 @@ export async function notifyAuthFailure(
     const { start, end } = nextReauthSlot();
     await upsertEvent(auth, 'system', {
       itemId: `reauth-${service}`,
+      kind: 'other',
       summary: title,
       description: body,
+      room: null,
       startDateTime: start.toISOString(),
       endDateTime: end.toISOString(),
       attachments: [],

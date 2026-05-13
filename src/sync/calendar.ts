@@ -44,6 +44,7 @@ function toCalendarResource(event: CalendarEvent): calendar_v3.Schema$Event {
   return {
     summary: event.summary,
     description: descriptionParts.join('\n'),
+    location: event.room ?? undefined,
     start: { dateTime: event.startDateTime, timeZone: TIME_ZONE },
     end: { dateTime: event.endDateTime, timeZone: TIME_ZONE },
   };
@@ -54,10 +55,17 @@ export async function upsertEvent(
   subjectId: string,
   event: CalendarEvent,
   store?: StateStore,
+  sourceLabel?: string,
 ): Promise<{ eventId: string; action: 'inserted' | 'updated' }> {
   const calendar = google.calendar({ version: 'v3', auth });
   const eventId = sanitizeEventId(subjectId, event.itemId);
   const resource = toCalendarResource(event);
+
+  const recordLocal = () => {
+    if (!store) return;
+    store.recordSyncedEvent(eventId, subjectId, event.itemId);
+    store.upsertCalendarItem(eventId, subjectId, event, sourceLabel ?? null);
+  };
 
   try {
     await calendar.events.update({
@@ -65,7 +73,7 @@ export async function upsertEvent(
       eventId,
       requestBody: { id: eventId, ...resource },
     });
-    store?.recordSyncedEvent(eventId, subjectId, event.itemId);
+    recordLocal();
     logger.info({ eventId, subjectId, itemId: event.itemId }, 'calendar updated');
     return { eventId, action: 'updated' };
   } catch (err) {
@@ -76,7 +84,7 @@ export async function upsertEvent(
         calendarId: CALENDAR_ID,
         requestBody: { id: eventId, ...resource },
       });
-      store?.recordSyncedEvent(eventId, subjectId, event.itemId);
+      recordLocal();
       logger.info({ eventId, subjectId, itemId: event.itemId }, 'calendar inserted');
       return { eventId, action: 'inserted' };
     }

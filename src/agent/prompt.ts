@@ -23,5 +23,18 @@ Hard rules:
    into the attachments array with absolute URLs and best-guess filenames.
    The attachments array is REQUIRED on every event — emit [] when there are
    no attachments rather than omitting the field.
+7. Classify each event's "kind" into exactly one of:
+     - "lecture"      — recurring scheduled class meeting
+     - "tutorial"     — recurring discussion / lab session
+     - "office-hours" — instructor or TA office hours
+     - "assignment"   — a homework / lab / project deadline
+     - "midterm"      — a midterm exam
+     - "exam"         — a final exam or other major exam
+     - "other"        — anything actionable that doesn't fit the above
+   Use the most specific kind that applies.
+8. "room" is the physical or virtual location. Set it to the room number
+   (e.g. "AQ 3149") if the source states one, "CourSys" / "Crowdmark" /
+   "Canvas" for online submissions, or null when the source says nothing.
+   Do not invent a room.
 
 You will be given the subject name, professor, source type, and the raw content.`;

@@ -4,10 +4,39 @@ export type Source =
 
 export interface Subject {
   id: string;
+  /** Short course code, e.g. "CMPT 307". Shown as the primary label in the UI. */
+  code?: string;
+  /** Full course name, e.g. "Data Structures and Algorithms". */
   name: string;
   professor: string;
+  /** Default lecture room — falls back when an event doesn't specify one. */
+  room?: string;
+  /** Term label, e.g. "Summer 2026". */
+  term?: string;
+  /**
+   * Hex color used by the UI for the event-block accent. Optional: when
+   * absent the client derives one deterministically from `id`.
+   */
+  color?: string;
   destinationFolder: string;
   sources: Source[];
+}
+
+export const SUBJECT_PALETTE = [
+  '#0066cc',
+  '#1f8a5b',
+  '#c97a17',
+  '#7d4cdb',
+  '#0f8a8a',
+];
+
+export function colorForSubject(subject: Subject): string {
+  if (subject.color) return subject.color;
+  let h = 0;
+  for (let i = 0; i < subject.id.length; i++) {
+    h = (h * 31 + subject.id.charCodeAt(i)) >>> 0;
+  }
+  return SUBJECT_PALETTE[h % SUBJECT_PALETTE.length]!;
 }
 
 export const subjects: Subject[] = [
@@ -24,8 +53,11 @@ export const subjects: Subject[] = [
   // },
   {
     id: 'cmpt307',
-    name: 'CMPT 307',
-    professor: 'TBD',
+    code: 'CMPT 307',
+    name: 'Data Structures and Algorithms',
+    professor: 'Valentine Kabanets',
+    term: 'Summer 2026',
+    color: '#0066cc',
     destinationFolder: 'D:/Desktop/University/Summer 2026/CMPT 307',
     sources: [
       { type: 'email', label: 'CMPT 307' },
@@ -34,8 +66,11 @@ export const subjects: Subject[] = [
   },
   {
     id: 'stat271',
-    name: 'STAT 271',
-    professor: 'TBD',
+    code: 'STAT 271',
+    name: 'Probability and Statistics for Computing Science',
+    professor: 'Sonja Isberg',
+    term: 'Summer 2026',
+    color: '#0f8a8a',
     destinationFolder: 'D:/Desktop/University/Summer 2026/STAT 271',
     sources: [
       { type: 'email', label: 'STAT 271' },
@@ -43,8 +78,11 @@ export const subjects: Subject[] = [
   },
   {
     id: 'stat302',
-    name: 'STAT 302',
-    professor: 'TBD',
+    code: 'STAT 302',
+    name: 'Analysis of Experimental and Observational Data',
+    professor: 'Gamage Harsha Perera',
+    term: 'Summer 2026',
+    color: '#1f8a5b',
     destinationFolder: 'D:/Desktop/University/Summer 2026/STAT 302',
     sources: [
       { type: 'email', label: 'STAT 302' },
