@@ -1,4 +1,6 @@
 import 'dotenv/config';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { logger } from './logger.js';
 import { StateStore } from './state/store.js';
 import { loadSubjects } from './config/subjectsStore.js';
@@ -7,18 +9,22 @@ import { runCourSysSetup, CourSysAuthError } from './auth/coursys.js';
 import { upsertEvent } from './sync/calendar.js';
 import { runPipeline } from './pipeline.js';
 import { notifyAuthFailure } from './notify/notifier.js';
+import { parseSchedulePdf } from './import/sfuPdf.js';
+import { bootstrapFromSchedule } from './import/bootstrap.js';
 
 type Command =
   | 'run'
   | 'setup:google'
   | 'setup:coursys'
-  | 'test:calendar';
+  | 'test:calendar'
+  | 'import:sfu';
 
 const COMMANDS: readonly Command[] = [
   'run',
   'setup:google',
   'setup:coursys',
   'test:calendar',
+  'import:sfu',
 ];
 
 function parseCommand(argv: string[]): Command {
@@ -36,6 +42,37 @@ function parseCommand(argv: string[]): Command {
   return arg as Command;
 }
 
+interface ImportArgs {
+  pdfPath: string;
+  baseFolder: string;
+}
+
+function parseImportArgs(argv: string[]): ImportArgs {
+  const args = argv.slice(3);
+  let pdfPath: string | undefined;
+  let baseFolder: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (a === '--base-folder') {
+      baseFolder = args[++i];
+    } else if (a.startsWith('--base-folder=')) {
+      baseFolder = a.slice('--base-folder='.length);
+    } else if (!pdfPath) {
+      pdfPath = a;
+    }
+  }
+  if (!pdfPath) {
+    throw new Error('usage: import:sfu <path-to-pdf> [--base-folder <path>]');
+  }
+  return {
+    pdfPath: resolve(pdfPath),
+    baseFolder:
+      baseFolder ??
+      process.env.AUTO_SCHEDULE_BASE_FOLDER ??
+      'downloads',
+  };
+}
+
 async function maybeJitter(command: Command): Promise<void> {
   if (command !== 'run') return;
   if (process.env.AUTO_SCHEDULE_NO_JITTER === '1') return;
@@ -47,6 +84,9 @@ async function maybeJitter(command: Command): Promise<void> {
 async function main(): Promise<void> {
   const command = parseCommand(process.argv);
   await maybeJitter(command);
+  // import:sfu parses its own args and needs to read subjects via the store —
+  // loading them here would be redundant but it's also the cheapest sanity
+  // check that the store boots.
   const subjects = loadSubjects();
   logger.info(
     { command, subjectCount: subjects.length, pid: process.pid },
@@ -79,6 +119,34 @@ async function main(): Promise<void> {
     }
     case 'setup:coursys': {
       await runCourSysSetup();
+      return;
+    }
+    case 'import:sfu': {
+      const args = parseImportArgs(process.argv);
+      const buf = readFileSync(args.pdfPath);
+      const schedule = await parseSchedulePdf(buf);
+      logger.info(
+        {
+          pdf: args.pdfPath,
+          term: schedule.term.label,
+          courses: schedule.courses.length,
+          baseFolder: args.baseFolder,
+        },
+        'parsed SFU schedule',
+      );
+      const store = new StateStore();
+      try {
+        const googleAuth = await getAuthorizedClient();
+        const result = await bootstrapFromSchedule(schedule, {
+          baseFolder: args.baseFolder,
+          googleAuth,
+          store,
+          sourceLabel: `pdf:${args.pdfPath.split(/[\\/]/).pop()}`,
+        });
+        logger.info(result, 'import:sfu finished');
+      } finally {
+        store.close();
+      }
       return;
     }
     case 'test:calendar': {

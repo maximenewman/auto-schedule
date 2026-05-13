@@ -41,13 +41,53 @@ function toCalendarResource(event: CalendarEvent): calendar_v3.Schema$Event {
       descriptionParts.push(`- ${a.filename}: ${a.url}`);
     }
   }
-  return {
+  const resource: calendar_v3.Schema$Event = {
     summary: event.summary,
     description: descriptionParts.join('\n'),
     location: event.room ?? undefined,
     start: { dateTime: event.startDateTime, timeZone: TIME_ZONE },
     end: { dateTime: event.endDateTime, timeZone: TIME_ZONE },
   };
+  if (event.recurrence && event.recurrence.length > 0) {
+    resource.recurrence = event.recurrence;
+  }
+  return resource;
+}
+
+function isEmpty(s: string | null | undefined): boolean {
+  return s === undefined || s === null || s.trim() === '';
+}
+
+/** Build a patch body containing only fields where the existing event has no
+ *  value. Anything the user has typed by hand on the calendar — a room change,
+ *  a renamed summary, an added note — survives subsequent runs. */
+function buildFillOnlyPatch(
+  existing: calendar_v3.Schema$Event,
+  next: calendar_v3.Schema$Event,
+): calendar_v3.Schema$Event {
+  const patch: calendar_v3.Schema$Event = {};
+  if (isEmpty(existing.summary) && !isEmpty(next.summary)) {
+    patch.summary = next.summary;
+  }
+  if (isEmpty(existing.description) && !isEmpty(next.description)) {
+    patch.description = next.description;
+  }
+  if (isEmpty(existing.location) && !isEmpty(next.location)) {
+    patch.location = next.location;
+  }
+  if (!existing.start?.dateTime && !existing.start?.date && next.start) {
+    patch.start = next.start;
+  }
+  if (!existing.end?.dateTime && !existing.end?.date && next.end) {
+    patch.end = next.end;
+  }
+  if (
+    (!existing.recurrence || existing.recurrence.length === 0) &&
+    next.recurrence && next.recurrence.length > 0
+  ) {
+    patch.recurrence = next.recurrence;
+  }
+  return patch;
 }
 
 export async function upsertEvent(
@@ -56,7 +96,7 @@ export async function upsertEvent(
   event: CalendarEvent,
   store?: StateStore,
   sourceLabel?: string,
-): Promise<{ eventId: string; action: 'inserted' | 'updated' }> {
+): Promise<{ eventId: string; action: 'inserted' | 'updated' | 'noop' }> {
   const calendar = google.calendar({ version: 'v3', auth });
   const eventId = sanitizeEventId(subjectId, event.itemId);
   const resource = toCalendarResource(event);
@@ -67,27 +107,41 @@ export async function upsertEvent(
     store.upsertCalendarItem(eventId, subjectId, event, sourceLabel ?? null);
   };
 
+  let existing: calendar_v3.Schema$Event | null = null;
   try {
-    await calendar.events.update({
-      calendarId: CALENDAR_ID,
-      eventId,
-      requestBody: { id: eventId, ...resource },
-    });
-    recordLocal();
-    logger.info({ eventId, subjectId, itemId: event.itemId }, 'calendar updated');
-    return { eventId, action: 'updated' };
+    const got = await calendar.events.get({ calendarId: CALENDAR_ID, eventId });
+    existing = got.data;
   } catch (err) {
     const status = (err as { code?: number; status?: number }).code
       ?? (err as { status?: number }).status;
-    if (status === 404) {
-      await calendar.events.insert({
-        calendarId: CALENDAR_ID,
-        requestBody: { id: eventId, ...resource },
-      });
-      recordLocal();
-      logger.info({ eventId, subjectId, itemId: event.itemId }, 'calendar inserted');
-      return { eventId, action: 'inserted' };
-    }
-    throw err;
+    if (status !== 404) throw err;
   }
+
+  if (!existing) {
+    await calendar.events.insert({
+      calendarId: CALENDAR_ID,
+      requestBody: { id: eventId, ...resource },
+    });
+    recordLocal();
+    logger.info({ eventId, subjectId, itemId: event.itemId }, 'calendar inserted');
+    return { eventId, action: 'inserted' };
+  }
+
+  const patch = buildFillOnlyPatch(existing, resource);
+  if (Object.keys(patch).length === 0) {
+    recordLocal();
+    logger.info({ eventId, subjectId, itemId: event.itemId }, 'calendar unchanged (user value preserved)');
+    return { eventId, action: 'noop' };
+  }
+  await calendar.events.patch({
+    calendarId: CALENDAR_ID,
+    eventId,
+    requestBody: patch,
+  });
+  recordLocal();
+  logger.info(
+    { eventId, subjectId, itemId: event.itemId, fields: Object.keys(patch) },
+    'calendar patched (filled empty fields only)',
+  );
+  return { eventId, action: 'updated' };
 }
