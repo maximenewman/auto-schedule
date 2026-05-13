@@ -40,6 +40,7 @@ export interface CalendarItemRow {
   endISO: string;
   room: string | null;
   attachments: { url: string; filename: string }[];
+  recurrence: string[] | null;
   sourceLabel: string | null;
   lastSyncedAt: string;
 }
@@ -106,6 +107,14 @@ export class StateStore {
       CREATE INDEX IF NOT EXISTS idx_calendar_items_start
         ON calendar_items(start_iso);
     `);
+    // Idempotent column add — `ALTER TABLE ADD COLUMN` errors if the column
+    // already exists, so check first.
+    const cols = this.db
+      .prepare("PRAGMA table_info(calendar_items)")
+      .all() as { name: string }[];
+    if (!cols.some((c) => c.name === 'recurrence_json')) {
+      this.db.exec("ALTER TABLE calendar_items ADD COLUMN recurrence_json TEXT");
+    }
   }
 
   hasSeenEmail(subjectId: string, messageId: string): boolean {
@@ -183,8 +192,9 @@ export class StateStore {
       .prepare(
         `INSERT OR REPLACE INTO calendar_items
           (event_id, subject_id, item_id, kind, summary, description,
-           start_iso, end_iso, room, attachments_json, source_label, last_synced_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           start_iso, end_iso, room, attachments_json, source_label, last_synced_at,
+           recurrence_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         eventId,
@@ -199,6 +209,9 @@ export class StateStore {
         JSON.stringify(event.attachments),
         sourceLabel,
         new Date().toISOString(),
+        event.recurrence && event.recurrence.length > 0
+          ? JSON.stringify(event.recurrence)
+          : null,
       );
   }
 
@@ -225,13 +238,17 @@ export class StateStore {
         room          AS room,
         attachments_json AS attachmentsJson,
         source_label  AS sourceLabel,
-        last_synced_at AS lastSyncedAt
+        last_synced_at AS lastSyncedAt,
+        recurrence_json AS recurrenceJson
       FROM calendar_items
       ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
       ORDER BY start_iso ASC
     `;
     const rows = this.db.prepare(sql).all(...args) as Array<
-      Omit<CalendarItemRow, 'attachments'> & { attachmentsJson: string }
+      Omit<CalendarItemRow, 'attachments' | 'recurrence'> & {
+        attachmentsJson: string;
+        recurrenceJson: string | null;
+      }
     >;
     return rows.map((r) => ({
       eventId: r.eventId,
@@ -244,6 +261,7 @@ export class StateStore {
       endISO: r.endISO,
       room: r.room,
       attachments: safeParseAttachments(r.attachmentsJson),
+      recurrence: safeParseStringArray(r.recurrenceJson),
       sourceLabel: r.sourceLabel,
       lastSyncedAt: r.lastSyncedAt,
     }));
@@ -289,5 +307,16 @@ function safeParseAttachments(json: string): { url: string; filename: string }[]
     );
   } catch {
     return [];
+  }
+}
+
+function safeParseStringArray(json: string | null): string[] | null {
+  if (!json) return null;
+  try {
+    const parsed = JSON.parse(json);
+    if (!Array.isArray(parsed)) return null;
+    return parsed.filter((s) => typeof s === 'string');
+  } catch {
+    return null;
   }
 }

@@ -36,5 +36,13 @@ Hard rules:
    (e.g. "AQ 3149") if the source states one, "CourSys" / "Crowdmark" /
    "Canvas" for online submissions, or null when the source says nothing.
    Do not invent a room.
+9. Before emitting an event, call the lookup_calendar_event tool with the
+   itemId you intend to use. If the response shows the event already exists
+   with a non-empty value for a field (room, summary, description, start/end),
+   that value is a user-edited / previously-synced value the tool will
+   preserve — your output for that field will be ignored. So: for fields the
+   user already filled in, you may omit them or leave them empty. Only emit
+   the fields the calendar is currently missing. If everything matches and
+   nothing is missing, skip the event entirely.
 
 You will be given the subject name, professor, source type, and the raw content.`;
