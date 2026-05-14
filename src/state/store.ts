@@ -125,6 +125,17 @@ export class StateStore {
         created_at      TEXT NOT NULL,
         PRIMARY KEY (subject_id, item_id)
       );
+
+      CREATE TABLE IF NOT EXISTS whatsapp_messages (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        phone      TEXT NOT NULL,
+        role       TEXT NOT NULL CHECK (role IN ('user','assistant')),
+        body       TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_whatsapp_messages_phone_created
+        ON whatsapp_messages(phone, created_at);
     `);
     // Idempotent column add  -  `ALTER TABLE ADD COLUMN` errors if the column
     // already exists, so check first.
@@ -366,6 +377,39 @@ export class StateStore {
 
   deleteSetting(key: string): void {
     this.db.prepare('DELETE FROM user_settings WHERE key = ?').run(key);
+  }
+
+  appendChatMessage(
+    phone: string,
+    role: 'user' | 'assistant',
+    body: string,
+  ): void {
+    this.db
+      .prepare(
+        `INSERT INTO whatsapp_messages (phone, role, body, created_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run(phone, role, body, new Date().toISOString());
+  }
+
+  getRecentChatMessages(
+    phone: string,
+    limit = 10,
+  ): { role: 'user' | 'assistant'; body: string; createdAt: string }[] {
+    const rows = this.db
+      .prepare(
+        `SELECT role, body, created_at AS createdAt
+           FROM whatsapp_messages
+          WHERE phone = ?
+          ORDER BY id DESC
+          LIMIT ?`,
+      )
+      .all(phone, limit) as Array<{
+        role: 'user' | 'assistant';
+        body: string;
+        createdAt: string;
+      }>;
+    return rows.reverse();
   }
 
   /** For the UI status block. */

@@ -32,6 +32,15 @@ import { getAuthorizedClient } from '../auth/google.js';
 import { listGoogleEvents } from '../sync/calendarRead.js';
 import type { OAuth2Client } from 'google-auth-library';
 import { logger } from '../logger.js';
+import {
+  handleVerifyHandshake,
+  loadMetaConfig,
+  parseInboundText,
+  sendText,
+  verifyWebhookSignature,
+  MetaConfigError,
+} from '../bot/meta.js';
+import { handleIncomingMessage } from '../bot/handler.js';
 
 interface RouteCtx {
   store: StateStore;
@@ -438,6 +447,92 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
     });
 
     return { started: true, runId };
+  });
+
+  // --- WhatsApp bot webhook ---------------------------------------------
+  //
+  // Meta calls GET once at subscribe-time with a hub.challenge it expects us
+  // to echo back. Afterwards it POSTs each inbound message + delivery event
+  // to the same URL. Both arms read config lazily so the server still boots
+  // if WA_* env vars aren't set yet.
+
+  app.get('/bot/whatsapp', async (req, reply) => {
+    let cfg;
+    try {
+      cfg = loadMetaConfig();
+    } catch (err) {
+      if (err instanceof MetaConfigError) {
+        return reply.code(503).send({ error: err.message });
+      }
+      throw err;
+    }
+    const result = handleVerifyHandshake(
+      req.query as Record<string, unknown>,
+      cfg,
+    );
+    if (!result.ok) {
+      logger.warn({ reason: result.reason }, 'whatsapp: verify handshake rejected');
+      return reply.code(403).send('forbidden');
+    }
+    return reply.type('text/plain').send(result.challenge);
+  });
+
+  app.post('/bot/whatsapp', async (req, reply) => {
+    let cfg;
+    try {
+      cfg = loadMetaConfig();
+    } catch (err) {
+      if (err instanceof MetaConfigError) {
+        return reply.code(503).send({ error: err.message });
+      }
+      throw err;
+    }
+    const sig = req.headers['x-hub-signature-256'];
+    const rawBody = (req as unknown as { rawBody?: Buffer }).rawBody;
+    if (!rawBody) {
+      logger.error('whatsapp: rawBody missing — parser not wired');
+      return reply.code(500).send({ error: 'raw body unavailable' });
+    }
+    if (!verifyWebhookSignature(rawBody, typeof sig === 'string' ? sig : undefined, cfg)) {
+      logger.warn('whatsapp: signature verification failed');
+      return reply.code(401).send('unauthorized');
+    }
+
+    // ACK Meta within ~5s or it'll retry. Process inbound text after the
+    // response is sent so a slow LLM call doesn't trigger duplicate webhooks.
+    reply.code(200).send('ok');
+
+    const inbound = parseInboundText(req.body);
+    if (!inbound) {
+      // Delivery / read receipts come through here too — nothing to do.
+      return;
+    }
+    if (inbound.from !== cfg.recipient) {
+      logger.warn(
+        { from: inbound.from, expected: cfg.recipient },
+        'whatsapp: ignoring message from non-allowed number',
+      );
+      return;
+    }
+    try {
+      const { reply: out } = await handleIncomingMessage(
+        ctx.store,
+        inbound.from,
+        inbound.text,
+      );
+      await sendText(inbound.from, out, cfg);
+    } catch (err) {
+      logger.error({ err, from: inbound.from }, 'whatsapp: reply pipeline failed');
+      try {
+        await sendText(
+          inbound.from,
+          'sorry — something went wrong on my end. try again in a moment.',
+          cfg,
+        );
+      } catch {
+        /* swallow */
+      }
+    }
   });
 }
 

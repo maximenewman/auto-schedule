@@ -38,6 +38,24 @@ async function main(): Promise<void> {
     limits: { fileSize: 10 * 1024 * 1024, files: 1 },
   });
 
+  // Preserve the raw JSON bytes alongside the parsed body. The WhatsApp
+  // webhook verifies an HMAC over the exact payload Meta sent, so we can't
+  // rely on JSON.stringify(req.body) — re-serialisation re-orders keys and
+  // changes whitespace, breaking the signature check.
+  app.addContentTypeParser(
+    'application/json',
+    { parseAs: 'buffer' },
+    (req, body, done) => {
+      (req as unknown as { rawBody: Buffer }).rawBody = body as Buffer;
+      try {
+        const text = (body as Buffer).toString('utf8');
+        done(null, text.length === 0 ? {} : JSON.parse(text));
+      } catch (err) {
+        done(err as Error, undefined);
+      }
+    },
+  );
+
   registerRoutes(app, { store, runState });
 
   const root = publicDir();

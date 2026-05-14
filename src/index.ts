@@ -12,6 +12,7 @@ import { notifyAuthFailure } from './notify/notifier.js';
 import { parseSchedulePdf } from './import/sfuPdf.js';
 import { bootstrapFromSchedule } from './import/bootstrap.js';
 import { runFullIcalSync, ICAL_URL_SETTING } from './import/icalSync.js';
+import { sendDailyDigest } from './bot/daily.js';
 
 type Command =
   | 'run'
@@ -19,7 +20,8 @@ type Command =
   | 'setup:coursys'
   | 'test:calendar'
   | 'import:sfu'
-  | 'sync:ical';
+  | 'sync:ical'
+  | 'notify:daily';
 
 const COMMANDS: readonly Command[] = [
   'run',
@@ -28,6 +30,7 @@ const COMMANDS: readonly Command[] = [
   'test:calendar',
   'import:sfu',
   'sync:ical',
+  'notify:daily',
 ];
 
 function parseCommand(argv: string[]): Command {
@@ -164,6 +167,16 @@ async function main(): Promise<void> {
           sourceLabel: `pdf:${args.pdfPath.split(/[\\/]/).pop()}`,
         });
         logger.info(result, 'import:sfu finished');
+      } finally {
+        store.close();
+      }
+      return;
+    }
+    case 'notify:daily': {
+      const store = new StateStore();
+      try {
+        const result = await sendDailyDigest(store);
+        logger.info(result, 'notify:daily finished');
       } finally {
         store.close();
       }
