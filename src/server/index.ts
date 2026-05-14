@@ -5,7 +5,7 @@ import fastifyMultipart from '@fastify/multipart';
 import { resolve, dirname } from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { StateStore } from '../state/store.js';
+import { Store } from '../state/store.js';
 import { logger } from '../logger.js';
 import { registerRoutes, makeRunState } from './routes.js';
 
@@ -25,7 +25,7 @@ function publicDir(): string {
 }
 
 async function main(): Promise<void> {
-  const store = new StateStore();
+  const store = await Store.create();
   const runState = makeRunState();
   const app = Fastify({ logger: false });
 
@@ -76,12 +76,12 @@ async function main(): Promise<void> {
   process.on('SIGINT', async () => {
     logger.info('SIGINT  -  shutting down');
     await app.close();
-    store.close();
+    await store.close();
     process.exit(0);
   });
   process.on('SIGTERM', async () => {
     await app.close();
-    store.close();
+    await store.close();
     process.exit(0);
   });
 

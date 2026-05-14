@@ -63,7 +63,7 @@ export class SiteSource implements SourceFetcher {
 
       const scraped = await scrapePage(page, source.url);
       const hash = sha256(scraped.text);
-      const prior = this.store.getSiteHash(subject.id, source.url);
+      const prior = await this.store.getSiteHash(subject.id, source.url);
       logger.info(
         {
           subjectId: subject.id,
@@ -95,11 +95,11 @@ export class SiteSource implements SourceFetcher {
     }
   }
 
-  markProcessed(subject: Subject, source: Source, item: SourceItem): void {
+  async markProcessed(subject: Subject, source: Source, item: SourceItem): Promise<void> {
     if (source.type !== 'site') return;
     const hash = item.meta?.contentHash;
     if (hash) {
-      this.store.setSiteHash(subject.id, source.url, hash);
+      await this.store.setSiteHash(subject.id, source.url, hash);
     }
   }
 }

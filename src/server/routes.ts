@@ -4,7 +4,7 @@ import { basename, resolve as resolvePath } from 'node:path';
 import { statSync, existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { ZodError } from 'zod';
-import { StateStore } from '../state/store.js';
+import type { StateStore } from '../state/store.js';
 import {
   loadSubjects,
   findSubject,
@@ -105,23 +105,25 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
     const now = new Date().toISOString();
     const subjects = loadSubjects();
     const events = await readEvents({ fromISO: now });
-    return subjects.map((s) => {
-      const subjectEvents = events.filter((e) => e.subjectId === s.id);
-      const upcomingDeadlines = subjectEvents.filter(
-        (e) => e.kind === 'assignment' || e.kind === 'midterm' || e.kind === 'exam',
-      );
-      const files = ctx.store.listDownloadedFilesByPathPrefix(
-        s.destinationFolder,
-      );
-      return {
-        ...serializeSubject(s),
-        counts: {
-          upcomingDeadlines: upcomingDeadlines.length,
-          files: files.length,
-          sources: s.sources.length,
-        },
-      };
-    });
+    return Promise.all(
+      subjects.map(async (s) => {
+        const subjectEvents = events.filter((e) => e.subjectId === s.id);
+        const upcomingDeadlines = subjectEvents.filter(
+          (e) => e.kind === 'assignment' || e.kind === 'midterm' || e.kind === 'exam',
+        );
+        const files = await ctx.store.listDownloadedFilesByPathPrefix(
+          s.destinationFolder,
+        );
+        return {
+          ...serializeSubject(s),
+          counts: {
+            upcomingDeadlines: upcomingDeadlines.length,
+            files: files.length,
+            sources: s.sources.length,
+          },
+        };
+      }),
+    );
   });
 
   app.get('/api/subjects/:id', async (req, reply) => {
@@ -182,7 +184,7 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
     const { id } = req.params as { id: string };
     const subject = findSubject(id);
     if (!subject) return reply.code(404).send({ error: 'not found' });
-    const rows = ctx.store.listDownloadedFilesByPathPrefix(subject.destinationFolder);
+    const rows = await ctx.store.listDownloadedFilesByPathPrefix(subject.destinationFolder);
     return rows.map((r) => {
       let bytes: number | null = null;
       try {
@@ -205,19 +207,16 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
   }> => {
     const nowMs = Date.now();
     const weekAgo = new Date(nowMs - 7 * 24 * 60 * 60 * 1000).toISOString();
-    const itemsLastWeek = ctx.store
-      .listCalendarItems({})
-      .filter((e) => e.lastSyncedAt >= weekAgo).length;
+    const allItems = await ctx.store.listCalendarItems({});
+    const itemsLastWeek = allItems.filter((e) => e.lastSyncedAt >= weekAgo).length;
     const lastRun = ctx.runState.lastRun;
     const lastRunISO = lastRun?.finishedAt ?? null;
     const itemsAddedLastRun = lastRun
-      ? ctx.store
-          .listCalendarItems({})
-          .filter(
-            (e) =>
-              e.lastSyncedAt >= lastRun.startedAt &&
-              e.lastSyncedAt <= lastRun.finishedAt,
-          ).length
+      ? allItems.filter(
+          (e) =>
+            e.lastSyncedAt >= lastRun.startedAt &&
+            e.lastSyncedAt <= lastRun.finishedAt,
+        ).length
       : 0;
     const cookie = coursysCookieAge();
     return {
@@ -308,14 +307,14 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
   });
 
   app.get('/api/settings/ical-url', async () => {
-    return { url: ctx.store.getSetting(ICAL_URL_SETTING) };
+    return { url: await ctx.store.getSetting(ICAL_URL_SETTING) };
   });
 
   app.put('/api/settings/ical-url', async (req, reply) => {
     const body = req.body as { url?: unknown };
     const raw = typeof body?.url === 'string' ? body.url.trim() : '';
     if (raw === '') {
-      ctx.store.deleteSetting(ICAL_URL_SETTING);
+      await ctx.store.deleteSetting(ICAL_URL_SETTING);
       return { url: null };
     }
     try {
@@ -326,12 +325,12 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
     } catch {
       return reply.code(400).send({ error: 'invalid url' });
     }
-    ctx.store.setSetting(ICAL_URL_SETTING, raw);
+    await ctx.store.setSetting(ICAL_URL_SETTING, raw);
     return { url: raw };
   });
 
   app.post('/api/import/ical', async (_req, reply) => {
-    const url = ctx.store.getSetting(ICAL_URL_SETTING);
+    const url = await ctx.store.getSetting(ICAL_URL_SETTING);
     if (!url) {
       return reply.code(400).send({ error: 'no iCal URL configured' });
     }

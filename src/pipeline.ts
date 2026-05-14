@@ -38,7 +38,7 @@ export async function runPipeline(
   // iCal subscription is the default ingestion path  -  if a global CourSys
   // iCal URL is saved, sync it first so any auto-created subjects exist
   // before the per-subject email/site loop runs.
-  const icalUrl = ctx.store.getSetting(ICAL_URL_SETTING);
+  const icalUrl = await ctx.store.getSetting(ICAL_URL_SETTING);
   if (icalUrl) {
     try {
       const r = await runFullIcalSync(icalUrl, {
@@ -165,7 +165,7 @@ async function processSource(
     }
 
     // Mark processed AFTER calendar upserts so a failure mid-loop re-runs cleanly.
-    fetcher.markProcessed(subject, source, item);
+    await fetcher.markProcessed(subject, source, item);
   }
 
   return { items: items.length, upserted };

@@ -54,9 +54,9 @@ export async function handleIncomingMessage(
   phone: string,
   text: string,
 ): Promise<HandleResult> {
-  store.appendChatMessage(phone, 'user', text);
+  await store.appendChatMessage(phone, 'user', text);
 
-  const history = store.getRecentChatMessages(phone, HISTORY_TURNS * 2);
+  const history = await store.getRecentChatMessages(phone, HISTORY_TURNS * 2);
   const messages: CoreMessage[] = history.map((m) => ({
     role: m.role,
     content: m.body,
@@ -74,7 +74,7 @@ export async function handleIncomingMessage(
   });
 
   const reply = result.text.trim() || 'sorry, I drew a blank — try again?';
-  store.appendChatMessage(phone, 'assistant', reply);
+  await store.appendChatMessage(phone, 'assistant', reply);
 
   const toolCalls = result.steps?.reduce((n, s) => n + s.toolCalls.length, 0) ?? 0;
   logger.info(

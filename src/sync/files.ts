@@ -42,14 +42,14 @@ export async function downloadAttachment(
       return null;
     }
     const hash = createHash('sha256').update(buffer).digest('hex');
-    if (ctx.store.hasDownloadedFile(hash)) {
+    if (await ctx.store.hasDownloadedFile(hash)) {
       logger.debug({ hash, url: attachment.url }, 'attachment already downloaded; skipping');
       return { path: '', hash, bytes: buffer.byteLength, reused: true };
     }
     const safeName = sanitizeFilename(attachment.filename);
     const target = uniquePath(join(absFolder, safeName));
     writeFileSync(target, buffer);
-    ctx.store.recordDownloadedFile(hash, target);
+    await ctx.store.recordDownloadedFile(hash, target);
     logger.info({ target, hash, bytes: buffer.byteLength }, 'attachment downloaded');
     return { path: target, hash, bytes: buffer.byteLength, reused: false };
   } catch (err) {

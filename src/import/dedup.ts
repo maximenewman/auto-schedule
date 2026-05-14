@@ -62,7 +62,7 @@ export async function mergeSubject(opts: MergeOptions): Promise<MergeResult> {
 
   if (deleteGoogleEvents && googleAuth) {
     const calendar = google.calendar({ version: 'v3', auth: googleAuth });
-    const rows = store.listCalendarItems({ subjectId: fromId });
+    const rows = await store.listCalendarItems({ subjectId: fromId });
     for (const r of rows) {
       try {
         await calendar.events.delete({ calendarId: CALENDAR_ID, eventId: r.eventId });
@@ -85,8 +85,8 @@ export async function mergeSubject(opts: MergeOptions): Promise<MergeResult> {
     }
   }
 
-  result.localItemsDeleted = store.deleteCalendarItemsForSubject(fromId);
-  result.localSyncedEventsDeleted = store.deleteSyncedEventsForSubject(fromId);
+  result.localItemsDeleted = await store.deleteCalendarItemsForSubject(fromId);
+  result.localSyncedEventsDeleted = await store.deleteSyncedEventsForSubject(fromId);
   deleteSubject(fromId);
 
   logger.info(result, 'dedup: merge complete');
@@ -130,9 +130,10 @@ export async function mergeEvent(opts: MergeEventOptions): Promise<MergeEventRes
   for (const redundant of redundantEventIds) {
     if (redundant === canonicalEventId) continue;
     // Look up the local row so we know what (subject_id, item_id) to redirect.
-    const rows = store.listCalendarItems({}).filter((r) => r.eventId === redundant);
+    const allRows = await store.listCalendarItems({});
+    const rows = allRows.filter((r) => r.eventId === redundant);
     for (const row of rows) {
-      store.setEventRedirect(row.subjectId, row.itemId, canonicalEventId);
+      await store.setEventRedirect(row.subjectId, row.itemId, canonicalEventId);
       result.redirectsRecorded++;
     }
 
@@ -153,7 +154,7 @@ export async function mergeEvent(opts: MergeEventOptions): Promise<MergeEventRes
 
     // Local rows pointing at the redundant event id are no longer useful  - 
     // the data lives on the canonical event going forward.
-    result.localRowsDeleted += store.deleteCalendarItemByEventId(redundant);
+    result.localRowsDeleted += await store.deleteCalendarItemByEventId(redundant);
   }
 
   logger.info(result, 'dedup: event merge complete');

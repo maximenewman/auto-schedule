@@ -95,7 +95,7 @@ export function buildBotTools(store: StateStore) {
       execute: async ({ daysAhead, kinds }) => {
         const now = new Date();
         const end = new Date(now.getTime() + daysAhead * 24 * 60 * 60 * 1000);
-        const rows = store.listCalendarItems({
+        const rows = await store.listCalendarItems({
           fromISO: now.toISOString(),
           toISO: end.toISOString(),
         });
@@ -124,7 +124,7 @@ export function buildBotTools(store: StateStore) {
       execute: async ({ query, includePast }) => {
         const q = query.toLowerCase();
         const fromISO = includePast ? undefined : new Date().toISOString();
-        const rows = store.listCalendarItems({ fromISO });
+        const rows = await store.listCalendarItems({ fromISO });
         const hits = rows.filter(
           (r) =>
             r.summary.toLowerCase().includes(q) ||
@@ -167,7 +167,7 @@ export function buildBotTools(store: StateStore) {
         }
         const now = new Date();
         const end = new Date(now.getTime() + daysAhead * 24 * 60 * 60 * 1000);
-        const rows = store.listCalendarItems({
+        const rows = await store.listCalendarItems({
           subjectId,
           fromISO: now.toISOString(),
           toISO: end.toISOString(),

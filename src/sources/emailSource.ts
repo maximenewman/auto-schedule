@@ -34,7 +34,10 @@ export class EmailSource implements SourceFetcher {
     const allIds = (list.data.messages ?? [])
       .map((m) => m.id)
       .filter((id): id is string => typeof id === 'string');
-    const messageIds = allIds.filter((id) => !this.store.hasSeenEmail(subject.id, id));
+    const seenFlags = await Promise.all(
+      allIds.map((id) => this.store.hasSeenEmail(subject.id, id)),
+    );
+    const messageIds = allIds.filter((_id, i) => !seenFlags[i]);
     logger.info(
       {
         subjectId: subject.id,
@@ -67,8 +70,8 @@ export class EmailSource implements SourceFetcher {
     return items;
   }
 
-  markProcessed(subject: Subject, _source: Source, item: SourceItem): void {
-    this.store.markEmailSeen(subject.id, item.sourceItemId);
+  async markProcessed(subject: Subject, _source: Source, item: SourceItem): Promise<void> {
+    await this.store.markEmailSeen(subject.id, item.sourceItemId);
   }
 }
 

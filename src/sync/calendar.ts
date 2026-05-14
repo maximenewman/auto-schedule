@@ -102,14 +102,14 @@ export async function upsertEvent(
   // from different sources (e.g. an iCal D1 lecture into a PDF LEC). Re-run
   // syncs honour that redirect so the same merge doesn't have to happen
   // again on every poll.
-  const redirect = store?.getEventRedirect(subjectId, event.itemId);
+  const redirect = store ? await store.getEventRedirect(subjectId, event.itemId) : null;
   const eventId = redirect ?? sanitizeEventId(subjectId, event.itemId);
   const resource = toCalendarResource(event);
 
-  const recordLocal = () => {
+  const recordLocal = async () => {
     if (!store) return;
-    store.recordSyncedEvent(eventId, subjectId, event.itemId);
-    store.upsertCalendarItem(eventId, subjectId, event, sourceLabel ?? null);
+    await store.recordSyncedEvent(eventId, subjectId, event.itemId);
+    await store.upsertCalendarItem(eventId, subjectId, event, sourceLabel ?? null);
   };
 
   let existing: calendar_v3.Schema$Event | null = null;
@@ -127,14 +127,14 @@ export async function upsertEvent(
       calendarId: CALENDAR_ID,
       requestBody: { id: eventId, ...resource },
     });
-    recordLocal();
+    await recordLocal();
     logger.info({ eventId, subjectId, itemId: event.itemId }, 'calendar inserted');
     return { eventId, action: 'inserted' };
   }
 
   const patch = buildFillOnlyPatch(existing, resource);
   if (Object.keys(patch).length === 0) {
-    recordLocal();
+    await recordLocal();
     logger.info({ eventId, subjectId, itemId: event.itemId }, 'calendar unchanged (user value preserved)');
     return { eventId, action: 'noop' };
   }

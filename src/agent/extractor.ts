@@ -83,7 +83,7 @@ export async function extractEvents(
           execute: async ({ itemId }) => {
             if (!ctx.store) return { exists: false, itemId };
             const eventId = sanitizeEventId(subject.id, itemId);
-            const items = ctx.store.listCalendarItems({ subjectId: subject.id });
+            const items = await ctx.store.listCalendarItems({ subjectId: subject.id });
             const found = items.find((i) => i.eventId === eventId || i.itemId === itemId);
             if (!found) return { exists: false, itemId };
             return {

@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { logger } from './logger.js';
-import { StateStore } from './state/store.js';
+import { Store } from './state/store.js';
 import { loadSubjects } from './config/subjectsStore.js';
 import { runGoogleSetup, getAuthorizedClient } from './auth/google.js';
 import { runCourSysSetup, CourSysAuthError } from './auth/coursys.js';
@@ -101,7 +101,7 @@ async function main(): Promise<void> {
 
   switch (command) {
     case 'run': {
-      const store = new StateStore();
+      const store = await Store.create();
       try {
         const googleAuth = await getAuthorizedClient();
         try {
@@ -115,7 +115,7 @@ async function main(): Promise<void> {
           throw err;
         }
       } finally {
-        store.close();
+        await store.close();
       }
       return;
     }
@@ -128,9 +128,9 @@ async function main(): Promise<void> {
       return;
     }
     case 'sync:ical': {
-      const store = new StateStore();
+      const store = await Store.create();
       try {
-        const url = process.argv[3] ?? store.getSetting(ICAL_URL_SETTING);
+        const url = process.argv[3] ?? (await store.getSetting(ICAL_URL_SETTING));
         if (!url) {
           throw new Error(
             'no iCal URL configured. Pass as arg or save via the UI (Schedule -> iCal subscription).',
@@ -140,7 +140,7 @@ async function main(): Promise<void> {
         const result = await runFullIcalSync(url, { googleAuth, store });
         logger.info(result, 'sync:ical finished');
       } finally {
-        store.close();
+        await store.close();
       }
       return;
     }
@@ -157,7 +157,7 @@ async function main(): Promise<void> {
         },
         'parsed SFU schedule',
       );
-      const store = new StateStore();
+      const store = await Store.create();
       try {
         const googleAuth = await getAuthorizedClient();
         const result = await bootstrapFromSchedule(schedule, {
@@ -168,22 +168,22 @@ async function main(): Promise<void> {
         });
         logger.info(result, 'import:sfu finished');
       } finally {
-        store.close();
+        await store.close();
       }
       return;
     }
     case 'notify:daily': {
-      const store = new StateStore();
+      const store = await Store.create();
       try {
         const result = await sendDailyDigest(store);
         logger.info(result, 'notify:daily finished');
       } finally {
-        store.close();
+        await store.close();
       }
       return;
     }
     case 'test:calendar': {
-      const store = new StateStore();
+      const store = await Store.create();
       try {
         const auth = await getAuthorizedClient();
         const now = new Date();
@@ -207,7 +207,7 @@ async function main(): Promise<void> {
         );
         logger.info({ result }, 'test:calendar finished');
       } finally {
-        store.close();
+        await store.close();
       }
       return;
     }

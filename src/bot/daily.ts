@@ -106,14 +106,13 @@ export async function sendDailyDigest(
   const cfg = loadMetaConfig();
   const subjects = loadSubjects();
   const { startISO, endISO, label } = todayBoundsISO();
-  const items = store
-    .listCalendarItems({ fromISO: startISO, toISO: endISO })
-    .map((r) => ({
-      subjectId: r.subjectId,
-      kind: r.kind,
-      summary: r.summary,
-      startISO: r.startISO,
-    }));
+  const rows = await store.listCalendarItems({ fromISO: startISO, toISO: endISO });
+  const items = rows.map((r) => ({
+    subjectId: r.subjectId,
+    kind: r.kind,
+    summary: r.summary,
+    startISO: r.startISO,
+  }));
 
   if (items.length === 0) {
     logger.info({ label }, 'daily digest: nothing scheduled, skipping');
@@ -129,7 +128,7 @@ export async function sendDailyDigest(
     cfg,
   );
   // Record outbound so the bot can reference it if the user replies.
-  store.appendChatMessage(
+  await store.appendChatMessage(
     cfg.recipient,
     'assistant',
     `[daily digest ${label}] ${body}`,

@@ -52,7 +52,7 @@ export async function listGoogleEvents(
 
   // Build a lookup: every locally-known event id (master event id for
   // recurrences) -> metadata we need to attach.
-  const localRows = store.listCalendarItems(
+  const localRows = await store.listCalendarItems(
     opts.subjectId ? { subjectId: opts.subjectId } : {},
   );
   const localById = new Map<string, CalendarItemRow>();
