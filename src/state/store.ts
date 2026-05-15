@@ -33,6 +33,42 @@ export interface ChatMessageRow {
   createdAt: string;
 }
 
+export interface AnnouncementRow {
+  entryId: string;
+  subjectId: string | null;
+  courseCode: string | null;
+  title: string;
+  contentHtml: string;
+  link: string | null;
+  author: string | null;
+  publishedAt: string | null;
+  updatedAt: string | null;
+  extractStatus: 'pending' | 'extracted' | 'skipped';
+  fetchedAt: string;
+}
+
+interface AnnouncementDbRow {
+  entryId: string;
+  subjectId: string | null;
+  courseCode: string | null;
+  title: string;
+  contentHtml: string;
+  link: string | null;
+  author: string | null;
+  publishedAt: Date | string | null;
+  updatedAt: Date | string | null;
+  extractStatus: 'pending' | 'extracted' | 'skipped';
+  fetchedAt: Date | string;
+}
+
+function toIso(v: Date | string): string {
+  return typeof v === 'string' ? v : v.toISOString();
+}
+function toIsoOrNull(v: Date | string | null): string | null {
+  if (v === null) return null;
+  return toIso(v);
+}
+
 interface AttachmentRecord {
   url: string;
   filename: string;
@@ -414,6 +450,99 @@ export class Store {
     await this.sql`
       DELETE FROM user_settings
        WHERE user_id = ${userId} AND key = ${key}
+    `;
+  }
+
+  // ---- announcements (CourSys Atom feed) -------------------------------
+
+  async upsertAnnouncement(
+    row: {
+      entryId: string;
+      subjectId: string | null;
+      courseCode: string | null;
+      title: string;
+      contentHtml: string;
+      link: string | null;
+      author: string | null;
+      publishedAt: string | null;
+      updatedAt: string | null;
+    },
+    userId: number = DEFAULT_USER_ID,
+  ): Promise<{ inserted: boolean }> {
+    // Use INSERT … ON CONFLICT DO UPDATE returning xmax to tell apart inserts
+    // (xmax = 0) from updates. Lets the caller count "new this run".
+    const rows = await this.sql<{ inserted: boolean }[]>`
+      INSERT INTO announcements (
+        user_id, entry_id, subject_id, course_code, title,
+        content_html, link, author, published_at, updated_at
+      ) VALUES (
+        ${userId}, ${row.entryId}, ${row.subjectId}, ${row.courseCode},
+        ${row.title}, ${row.contentHtml}, ${row.link}, ${row.author},
+        ${row.publishedAt}, ${row.updatedAt}
+      )
+      ON CONFLICT (user_id, entry_id) DO UPDATE SET
+        subject_id   = EXCLUDED.subject_id,
+        course_code  = EXCLUDED.course_code,
+        title        = EXCLUDED.title,
+        content_html = EXCLUDED.content_html,
+        link         = EXCLUDED.link,
+        author       = EXCLUDED.author,
+        published_at = EXCLUDED.published_at,
+        updated_at   = EXCLUDED.updated_at
+      RETURNING (xmax = 0) AS "inserted"
+    `;
+    return { inserted: rows[0]?.inserted ?? false };
+  }
+
+  async listAnnouncements(
+    opts: { subjectId?: string; limit?: number } = {},
+    userId: number = DEFAULT_USER_ID,
+  ): Promise<AnnouncementRow[]> {
+    const sql = this.sql;
+    const limit = Math.max(1, Math.min(opts.limit ?? 200, 1000));
+    const rows = await sql<AnnouncementDbRow[]>`
+      SELECT
+        entry_id      AS "entryId",
+        subject_id    AS "subjectId",
+        course_code   AS "courseCode",
+        title         AS "title",
+        content_html  AS "contentHtml",
+        link          AS "link",
+        author        AS "author",
+        published_at  AS "publishedAt",
+        updated_at    AS "updatedAt",
+        extract_status AS "extractStatus",
+        fetched_at    AS "fetchedAt"
+      FROM announcements
+      WHERE user_id = ${userId}
+        ${opts.subjectId ? sql`AND subject_id = ${opts.subjectId}` : sql``}
+      ORDER BY published_at DESC NULLS LAST, fetched_at DESC
+      LIMIT ${limit}
+    `;
+    return rows.map((r) => ({
+      entryId: r.entryId,
+      subjectId: r.subjectId,
+      courseCode: r.courseCode,
+      title: r.title,
+      contentHtml: r.contentHtml,
+      link: r.link,
+      author: r.author,
+      publishedAt: toIsoOrNull(r.publishedAt),
+      updatedAt: toIsoOrNull(r.updatedAt),
+      extractStatus: r.extractStatus,
+      fetchedAt: toIso(r.fetchedAt),
+    }));
+  }
+
+  async setAnnouncementExtractStatus(
+    entryId: string,
+    status: 'pending' | 'extracted' | 'skipped',
+    userId: number = DEFAULT_USER_ID,
+  ): Promise<void> {
+    await this.sql`
+      UPDATE announcements
+         SET extract_status = ${status}
+       WHERE user_id = ${userId} AND entry_id = ${entryId}
     `;
   }
 

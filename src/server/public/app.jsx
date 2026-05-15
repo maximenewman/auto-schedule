@@ -1,4 +1,4 @@
-/* global React, ReactDOM, useHashRoute, GlobalNav, SchedulePage, SubjectsPage, SubjectDetail, useTweaks, TweaksPanel, TweakSection, TweakRadio */
+/* global React, ReactDOM, useHashRoute, GlobalNav, SchedulePage, SubjectsPage, SubjectDetail, AnnouncementsPage, useTweaks, TweaksPanel, TweakSection, TweakRadio */
 const { useState, useEffect } = React;
 
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
@@ -46,6 +46,8 @@ function App() {
     body = <SubjectDetail id={param} now={now} />;
   } else if (route === 'subjects') {
     body = <SubjectsPage now={now} />;
+  } else if (route === 'announcements') {
+    body = <AnnouncementsPage subjectId={param} />;
   } else {
     body = <SchedulePage now={now} tweaks={tweaks} />;
   }
