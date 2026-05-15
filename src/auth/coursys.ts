@@ -37,18 +37,6 @@ export async function loadCookies(
   return row.cookies.filter(isValidCookie);
 }
 
-export async function saveCookies(
-  store: Store,
-  userId: number,
-  cookies: CourSysCookie[],
-): Promise<void> {
-  await store.saveCourSysCookies(userId, cookies);
-}
-
-export async function clearCookies(store: Store, userId: number): Promise<void> {
-  await store.clearCourSysCookies(userId);
-}
-
 /**
  * Validate inbound cookie payloads from the UI upload. Permissive on
  * extras (Cookie-Editor adds storeId / hostOnly / etc) but strict on the

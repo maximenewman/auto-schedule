@@ -14,7 +14,6 @@ import { parseIcal, type IcalEvent } from '../sources/icalParser.js';
 import { mergeSubject, mergeEvent } from './dedup.js';
 import { planDedup } from './dedupAgent.js';
 import { enrichSubjects, type EnrichProgress } from './enrichSubjects.js';
-import { pushMissingLocalEvents } from './reconcile.js';
 import { logger } from '../logger.js';
 
 export type IcalProgress =
@@ -22,7 +21,7 @@ export type IcalProgress =
   | { stage: 'fetch'; status: 'done'; fetched: number }
   | { stage: 'upsert'; status: 'start'; total: number }
   | { stage: 'upsert'; status: 'tick'; processed: number; total: number }
-  | { stage: 'upsert'; status: 'done'; inserted: number; updated: number; unchanged: number; failures: number; subjectsCreated: number; restored?: number }
+  | { stage: 'upsert'; status: 'done'; inserted: number; updated: number; unchanged: number; failures: number; subjectsCreated: number }
   | { stage: 'dedup'; status: 'analyzing' }
   | { stage: 'dedup'; status: 'tick'; processed: number; total: number; kind: 'subject' | 'event'; detail?: string }
   | { stage: 'dedup'; status: 'done'; subjectMerges: number; eventMerges: number; googleEventsDeleted: number; warning?: string }
@@ -44,9 +43,6 @@ export interface IcalRunResult {
   googleEventsDeleted: number;
   dedupWarning?: string;
   subjectsEnriched: number;
-  /** Local rows whose Google event had been deleted (manually or
-   *  otherwise) and that we re-pushed to Google during this run. */
-  eventsRestored: number;
 }
 
 export const ICAL_URL_SETTING = 'coursys.ical_url';
@@ -384,79 +380,11 @@ export async function runFullIcalSync(
   onProgress?: (e: IcalProgress) => void,
 ): Promise<IcalRunResult> {
   try {
-    // The inner sync emits `upsert.done` as soon as the iCal upsert loop
-    // finishes. We hold that event back, run the reconcile push as part
-    // of the same visual phase, then emit one combined `upsert.done` so
-    // the UI doesn't flicker between "done" and "running" mid-sync.
-    // Use the specific upsert.done shape so TS doesn't narrow the value
-    // away in the closure capture.
-    type UpsertDone = Extract<IcalProgress, { stage: 'upsert'; status: 'done' }>;
-    let pendingUpsertDone: UpsertDone | null = null;
-    const wrappedProgress = (e: IcalProgress) => {
-      if (e.stage === 'upsert' && e.status === 'done') {
-        pendingUpsertDone = e;
-        return;
-      }
-      onProgress?.(e);
-    };
-    const sync = await syncIcalSubscription(url, opts, wrappedProgress);
-
-    // Local DB is the source of truth: anything in `calendar_items` that
-    // Google no longer has gets re-pushed. This makes a user-deleted
-    // Google event come back on the next sync. We stream it as more
-    // `upsert.tick` events so the UI keeps showing a single "Sync to
-    // Google Calendar" row.
-    let eventsRestored = 0;
-    try {
-      const upsertBase = sync.fetched; // tick numbers continue from here
-      const push = await pushMissingLocalEvents(
-        opts.googleAuth,
-        opts.store,
-        opts.userId,
-        ({ pushed, total, subjectId }) => {
-          onProgress?.({
-            stage: 'upsert',
-            status: 'tick',
-            processed: upsertBase + pushed,
-            total: upsertBase + total,
-          });
-          void subjectId;
-        },
-      );
-      eventsRestored = push.pushed;
-      if (push.pushed > 0 || push.failures > 0) {
-        logger.info(
-          {
-            googleCount: push.googleCount,
-            pushed: push.pushed,
-            failures: push.failures,
-          },
-          'ical: restored events missing on Google',
-        );
-      }
-    } catch (err) {
-      logger.warn(
-        { err: (err as Error).message },
-        'ical: reconcile-push failed (non-fatal)',
-      );
-    }
-
-    // Emit the now-combined upsert.done — append the restored count so
-    // the UI can show it in the phase's detail line.
-    const pending = pendingUpsertDone as UpsertDone | null;
-    if (pending) {
-      onProgress?.({ ...pending, restored: eventsRestored });
-    } else {
-      onProgress?.({
-        stage: 'upsert', status: 'done',
-        inserted: sync.eventsInserted,
-        updated: sync.eventsUpdated,
-        unchanged: sync.eventsUnchanged,
-        failures: sync.failures,
-        subjectsCreated: sync.subjectsCreated,
-        restored: eventsRestored,
-      });
-    }
+    // The iCal upsert loop's own progress events (incl. `upsert.done`) flow
+    // straight through to the caller — cancelled-event revival now happens
+    // inline inside `upsertEvent`, so there's no separate reconcile pass
+    // to interleave with this phase.
+    const sync = await syncIcalSubscription(url, opts, onProgress);
 
     onProgress?.({ stage: 'dedup', status: 'analyzing' });
     const { plan, warning: agentWarning } = await planDedup({
@@ -565,7 +493,6 @@ export async function runFullIcalSync(
       googleEventsDeleted: googleDeleted,
       dedupWarning: agentWarning,
       subjectsEnriched,
-      eventsRestored,
     };
     onProgress?.({ stage: 'done', result });
     return result;

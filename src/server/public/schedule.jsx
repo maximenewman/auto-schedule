@@ -359,13 +359,11 @@ function IcalSubscriptionButton() {
         if (evt.status === 'done')  {
           cur.status = 'done';
           cur.processed = cur.total;
-          const restored = evt.restored ?? 0;
           const parts = [
             `+${evt.inserted} new`,
             `${evt.updated} updated`,
             `${evt.unchanged} unchanged`,
           ];
-          if (restored > 0) parts.push(`${restored} restored`);
           if (evt.failures) parts.push(`${evt.failures} failed`);
           cur.detail = parts.join('  -  ');
         }
@@ -513,7 +511,6 @@ function IcalSubscriptionButton() {
                 {result.eventMerges > 0 ? `  -  ${result.eventMerges} event${result.eventMerges === 1 ? '' : 's'} merged` : ''}
                 {result.googleEventsDeleted > 0 ? `  -  ${result.googleEventsDeleted} stale Google events removed` : ''}
                 {result.subjectsEnriched > 0 ? `  -  ${result.subjectsEnriched} instructor${result.subjectsEnriched === 1 ? '' : 's'} filled` : ''}
-                {result.eventsRestored > 0 ? `  -  ${result.eventsRestored} event${result.eventsRestored === 1 ? '' : 's'} restored on Google` : ''}
                 .
               </div>
               {result.dedupWarning && (
