@@ -13,6 +13,7 @@ export interface MergeOptions {
   fromId: string;
   intoId: string;
   store: StateStore;
+  userId?: number;
   googleAuth?: OAuth2Client;
   /** If true, delete the orphan Google events under the duplicate's old IDs
    *  so the next sync recreates them cleanly under the canonical subject's
@@ -41,7 +42,7 @@ export interface MergeResult {
  *   3. Remove the duplicate subject row.
  */
 export async function mergeSubject(opts: MergeOptions): Promise<MergeResult> {
-  const { fromId, intoId, store, googleAuth, deleteGoogleEvents } = opts;
+  const { fromId, intoId, store, googleAuth, deleteGoogleEvents, userId } = opts;
   if (fromId === intoId) {
     throw new Error('mergeSubject: from and into are the same');
   }
@@ -62,7 +63,7 @@ export async function mergeSubject(opts: MergeOptions): Promise<MergeResult> {
 
   if (deleteGoogleEvents && googleAuth) {
     const calendar = google.calendar({ version: 'v3', auth: googleAuth });
-    const rows = await store.listCalendarItems({ subjectId: fromId });
+    const rows = await store.listCalendarItems({ subjectId: fromId }, userId);
     for (const r of rows) {
       try {
         await calendar.events.delete({ calendarId: CALENDAR_ID, eventId: r.eventId });
@@ -85,8 +86,8 @@ export async function mergeSubject(opts: MergeOptions): Promise<MergeResult> {
     }
   }
 
-  result.localItemsDeleted = await store.deleteCalendarItemsForSubject(fromId);
-  result.localSyncedEventsDeleted = await store.deleteSyncedEventsForSubject(fromId);
+  result.localItemsDeleted = await store.deleteCalendarItemsForSubject(fromId, userId);
+  result.localSyncedEventsDeleted = await store.deleteSyncedEventsForSubject(fromId, userId);
   deleteSubject(fromId);
 
   logger.info(result, 'dedup: merge complete');
@@ -97,6 +98,7 @@ export interface MergeEventOptions {
   canonicalEventId: string;
   redundantEventIds: string[];
   store: StateStore;
+  userId?: number;
   googleAuth: OAuth2Client;
 }
 
@@ -117,7 +119,7 @@ export interface MergeEventResult {
  * recreating the duplicate.
  */
 export async function mergeEvent(opts: MergeEventOptions): Promise<MergeEventResult> {
-  const { canonicalEventId, redundantEventIds, store, googleAuth } = opts;
+  const { canonicalEventId, redundantEventIds, store, googleAuth, userId } = opts;
   const calendar = google.calendar({ version: 'v3', auth: googleAuth });
   const result: MergeEventResult = {
     canonicalEventId,
@@ -130,10 +132,10 @@ export async function mergeEvent(opts: MergeEventOptions): Promise<MergeEventRes
   for (const redundant of redundantEventIds) {
     if (redundant === canonicalEventId) continue;
     // Look up the local row so we know what (subject_id, item_id) to redirect.
-    const allRows = await store.listCalendarItems({});
+    const allRows = await store.listCalendarItems({}, userId);
     const rows = allRows.filter((r) => r.eventId === redundant);
     for (const row of rows) {
-      await store.setEventRedirect(row.subjectId, row.itemId, canonicalEventId);
+      await store.setEventRedirect(row.subjectId, row.itemId, canonicalEventId, userId);
       result.redirectsRecorded++;
     }
 
@@ -154,7 +156,7 @@ export async function mergeEvent(opts: MergeEventOptions): Promise<MergeEventRes
 
     // Local rows pointing at the redundant event id are no longer useful  - 
     // the data lives on the canonical event going forward.
-    result.localRowsDeleted += await store.deleteCalendarItemByEventId(redundant);
+    result.localRowsDeleted += await store.deleteCalendarItemByEventId(redundant, userId);
   }
 
   logger.info(result, 'dedup: event merge complete');

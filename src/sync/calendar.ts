@@ -96,20 +96,21 @@ export async function upsertEvent(
   event: CalendarEvent,
   store?: StateStore,
   sourceLabel?: string,
+  userId?: number,
 ): Promise<{ eventId: string; action: 'inserted' | 'updated' | 'noop' }> {
   const calendar = google.calendar({ version: 'v3', auth });
   // The dedup agent records a redirect when it merges two events that came
   // from different sources (e.g. an iCal D1 lecture into a PDF LEC). Re-run
   // syncs honour that redirect so the same merge doesn't have to happen
   // again on every poll.
-  const redirect = store ? await store.getEventRedirect(subjectId, event.itemId) : null;
+  const redirect = store ? await store.getEventRedirect(subjectId, event.itemId, userId) : null;
   const eventId = redirect ?? sanitizeEventId(subjectId, event.itemId);
   const resource = toCalendarResource(event);
 
   const recordLocal = async () => {
     if (!store) return;
-    await store.recordSyncedEvent(eventId, subjectId, event.itemId);
-    await store.upsertCalendarItem(eventId, subjectId, event, sourceLabel ?? null);
+    await store.recordSyncedEvent(eventId, subjectId, event.itemId, userId);
+    await store.upsertCalendarItem(eventId, subjectId, event, sourceLabel ?? null, userId);
   };
 
   let existing: calendar_v3.Schema$Event | null = null;

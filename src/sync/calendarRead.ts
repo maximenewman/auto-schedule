@@ -10,6 +10,7 @@ export interface ListEventsOptions {
   fromISO?: string;
   toISO?: string;
   subjectId?: string;
+  userId?: number;
 }
 
 /**
@@ -54,6 +55,7 @@ export async function listGoogleEvents(
   // recurrences) -> metadata we need to attach.
   const localRows = await store.listCalendarItems(
     opts.subjectId ? { subjectId: opts.subjectId } : {},
+    opts.userId,
   );
   const localById = new Map<string, CalendarItemRow>();
   for (const r of localRows) localById.set(r.eventId, r);

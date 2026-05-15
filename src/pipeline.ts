@@ -12,6 +12,7 @@ import { runFullIcalSync, ICAL_URL_SETTING } from './import/icalSync.js';
 export interface RunContext {
   googleAuth: OAuth2Client;
   store: StateStore;
+  userId?: number;
 }
 
 export interface RunSummary {
@@ -38,12 +39,13 @@ export async function runPipeline(
   // iCal subscription is the default ingestion path  -  if a global CourSys
   // iCal URL is saved, sync it first so any auto-created subjects exist
   // before the per-subject email/site loop runs.
-  const icalUrl = await ctx.store.getSetting(ICAL_URL_SETTING);
+  const icalUrl = await ctx.store.getSetting(ICAL_URL_SETTING, ctx.userId);
   if (icalUrl) {
     try {
       const r = await runFullIcalSync(icalUrl, {
         googleAuth: ctx.googleAuth,
         store: ctx.store,
+        userId: ctx.userId,
       });
       summary.eventsUpserted += r.eventsInserted + r.eventsUpdated;
       summary.itemsProcessed += r.fetched;
@@ -126,6 +128,7 @@ async function processSource(
     );
     const extracted = await extractEvents(subject, source, item.content, {
       store: ctx.store,
+      userId: ctx.userId,
     });
     if (!extracted) {
       log.warn('      x agent returned no object; skipping item (raw output logged)');
@@ -141,6 +144,7 @@ async function processSource(
           event,
           ctx.store,
           describeSource(source),
+          ctx.userId,
         );
         upserted++;
       } catch (err) {
@@ -151,6 +155,7 @@ async function processSource(
         await downloadAttachment(attachment, subject.destinationFolder, {
           googleAuth: ctx.googleAuth,
           store: ctx.store,
+          userId: ctx.userId,
         });
       }
     }
@@ -161,6 +166,7 @@ async function processSource(
       await downloadAttachment(attachment, subject.destinationFolder, {
         googleAuth: ctx.googleAuth,
         store: ctx.store,
+        userId: ctx.userId,
       });
     }
 

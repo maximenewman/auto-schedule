@@ -20,7 +20,10 @@ interface ScrapedPage {
 export class SiteSource implements SourceFetcher {
   private browserPromise?: Promise<Browser>;
 
-  constructor(private readonly store: StateStore) {}
+  constructor(
+    private readonly store: StateStore,
+    private readonly userId?: number,
+  ) {}
 
   private getBrowser(): Promise<Browser> {
     if (!this.browserPromise) {
@@ -63,7 +66,7 @@ export class SiteSource implements SourceFetcher {
 
       const scraped = await scrapePage(page, source.url);
       const hash = sha256(scraped.text);
-      const prior = await this.store.getSiteHash(subject.id, source.url);
+      const prior = await this.store.getSiteHash(subject.id, source.url, this.userId);
       logger.info(
         {
           subjectId: subject.id,
@@ -99,7 +102,7 @@ export class SiteSource implements SourceFetcher {
     if (source.type !== 'site') return;
     const hash = item.meta?.contentHash;
     if (hash) {
-      await this.store.setSiteHash(subject.id, source.url, hash);
+      await this.store.setSiteHash(subject.id, source.url, hash, this.userId);
     }
   }
 }

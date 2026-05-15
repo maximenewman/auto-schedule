@@ -12,6 +12,7 @@ import { logger } from '../logger.js';
 export interface DownloadContext {
   googleAuth: OAuth2Client;
   store: StateStore;
+  userId?: number;
 }
 
 export interface DownloadResult {
@@ -42,14 +43,14 @@ export async function downloadAttachment(
       return null;
     }
     const hash = createHash('sha256').update(buffer).digest('hex');
-    if (await ctx.store.hasDownloadedFile(hash)) {
+    if (await ctx.store.hasDownloadedFile(hash, ctx.userId)) {
       logger.debug({ hash, url: attachment.url }, 'attachment already downloaded; skipping');
       return { path: '', hash, bytes: buffer.byteLength, reused: true };
     }
     const safeName = sanitizeFilename(attachment.filename);
     const target = uniquePath(join(absFolder, safeName));
     writeFileSync(target, buffer);
-    await ctx.store.recordDownloadedFile(hash, target);
+    await ctx.store.recordDownloadedFile(hash, target, ctx.userId);
     logger.info({ target, hash, bytes: buffer.byteLength }, 'attachment downloaded');
     return { path: target, hash, bytes: buffer.byteLength, reused: false };
   } catch (err) {

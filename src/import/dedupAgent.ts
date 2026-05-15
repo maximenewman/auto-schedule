@@ -123,6 +123,7 @@ Only emit a merge when you are confident the two rows describe the same real-wor
 export interface DedupCtx {
   store: StateStore;
   googleAuth: OAuth2Client;
+  userId?: number;
 }
 
 export interface DedupAgentResult {
@@ -362,7 +363,7 @@ async function fetchEventsForDedup(ctx: DedupCtx): Promise<CalendarItemRow[]> {
   // +/-90 days covers one full term comfortably and keeps the prompt bounded.
   const fromISO = new Date(now - 90 * 24 * 60 * 60 * 1000).toISOString();
   const toISO = new Date(now + 90 * 24 * 60 * 60 * 1000).toISOString();
-  return await listGoogleEvents(ctx.googleAuth, ctx.store, { fromISO, toISO });
+  return await listGoogleEvents(ctx.googleAuth, ctx.store, { fromISO, toISO, userId: ctx.userId });
 }
 
 function clusterByTimeConflict(events: CalendarItemRow[]): CalendarItemRow[][] {

@@ -40,6 +40,7 @@ function getProvider(): OpenAIProvider {
 
 export interface ExtractContext {
   store?: StateStore;
+  userId?: number;
 }
 
 export async function extractEvents(
@@ -83,7 +84,7 @@ export async function extractEvents(
           execute: async ({ itemId }) => {
             if (!ctx.store) return { exists: false, itemId };
             const eventId = sanitizeEventId(subject.id, itemId);
-            const items = await ctx.store.listCalendarItems({ subjectId: subject.id });
+            const items = await ctx.store.listCalendarItems({ subjectId: subject.id }, ctx.userId);
             const found = items.find((i) => i.eventId === eventId || i.itemId === itemId);
             if (!found) return { exists: false, itemId };
             return {

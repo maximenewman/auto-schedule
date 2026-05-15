@@ -464,11 +464,130 @@ export class Store {
       .reverse();
   }
 
+  // ---- users -----------------------------------------------------------
+
+  async findOrCreateUserByGoogleSub(input: {
+    sub: string;
+    email: string;
+    displayName: string | null;
+  }): Promise<UserRow> {
+    const rows = await this.sql<UserRow[]>`
+      INSERT INTO users (email, display_name, google_sub, created_at, updated_at)
+      VALUES (${input.email}, ${input.displayName}, ${input.sub}, now(), now())
+      ON CONFLICT (google_sub) DO UPDATE SET
+        email = EXCLUDED.email,
+        display_name = COALESCE(EXCLUDED.display_name, users.display_name),
+        updated_at = now()
+      RETURNING
+        id, email, display_name AS "displayName", google_sub AS "googleSub",
+        created_at AS "createdAt"
+    `;
+    if (rows.length === 0) {
+      throw new Error('findOrCreateUserByGoogleSub: insert returned no rows');
+    }
+    return rows[0]!;
+  }
+
+  async getUserById(userId: number): Promise<UserRow | null> {
+    const rows = await this.sql<UserRow[]>`
+      SELECT
+        id, email, display_name AS "displayName", google_sub AS "googleSub",
+        created_at AS "createdAt"
+      FROM users WHERE id = ${userId}
+    `;
+    return rows[0] ?? null;
+  }
+
+  async saveGoogleTokens(
+    userId: number,
+    tokens: {
+      refreshToken: string | null;
+      accessToken: string | null;
+      accessTokenExpires: Date | null;
+      scope: string | null;
+    },
+  ): Promise<void> {
+    // refresh_token only ships on the very first consent. Preserve any
+    // previously-saved value when the new exchange omits it.
+    await this.sql`
+      UPDATE users SET
+        google_refresh_token = COALESCE(${tokens.refreshToken}, google_refresh_token),
+        google_access_token = ${tokens.accessToken},
+        google_access_token_expires = ${tokens.accessTokenExpires},
+        google_scope = ${tokens.scope},
+        google_token_obtained_at = now(),
+        updated_at = now()
+      WHERE id = ${userId}
+    `;
+  }
+
+  async getGoogleTokens(userId: number): Promise<GoogleTokenRow | null> {
+    const rows = await this.sql<GoogleTokenRow[]>`
+      SELECT
+        google_refresh_token        AS "refreshToken",
+        google_access_token         AS "accessToken",
+        google_access_token_expires AS "accessTokenExpires",
+        google_scope                AS "scope"
+      FROM users WHERE id = ${userId}
+    `;
+    return rows[0] ?? null;
+  }
+
+  // ---- sessions --------------------------------------------------------
+
+  async createSession(
+    sessionId: string,
+    userId: number,
+    expiresAt: Date,
+  ): Promise<void> {
+    await this.sql`
+      INSERT INTO sessions (id, user_id, expires_at)
+      VALUES (${sessionId}, ${userId}, ${expiresAt})
+    `;
+  }
+
+  async getActiveSession(sessionId: string): Promise<SessionRow | null> {
+    const rows = await this.sql<SessionRow[]>`
+      SELECT id, user_id AS "userId", expires_at AS "expiresAt"
+        FROM sessions
+       WHERE id = ${sessionId} AND expires_at > now()
+    `;
+    if (rows.length === 0) return null;
+    // Bump last_seen so we can prune stale sessions later.
+    await this.sql`UPDATE sessions SET last_seen_at = now() WHERE id = ${sessionId}`;
+    return rows[0]!;
+  }
+
+  async destroySession(sessionId: string): Promise<void> {
+    await this.sql`DELETE FROM sessions WHERE id = ${sessionId}`;
+  }
+
   // ---- agent error counter (file-system backed; routes layer overrides) -
 
   countAgentErrorsBetween(_fromISO: string, _toISO: string): number {
     return 0;
   }
+}
+
+export interface UserRow {
+  id: number;
+  email: string;
+  displayName: string | null;
+  googleSub: string | null;
+  createdAt: string | Date;
+}
+
+export interface GoogleTokenRow {
+  refreshToken: string | null;
+  accessToken: string | null;
+  accessTokenExpires: Date | null;
+  scope: string | null;
+}
+
+export interface SessionRow {
+  id: string;
+  userId: number;
+  expiresAt: Date;
 }
 
 // Back-compat type alias so existing imports `StateStore` keep working.

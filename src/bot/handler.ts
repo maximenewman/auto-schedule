@@ -53,10 +53,11 @@ export async function handleIncomingMessage(
   store: StateStore,
   phone: string,
   text: string,
+  userId?: number,
 ): Promise<HandleResult> {
-  await store.appendChatMessage(phone, 'user', text);
+  await store.appendChatMessage(phone, 'user', text, userId);
 
-  const history = await store.getRecentChatMessages(phone, HISTORY_TURNS * 2);
+  const history = await store.getRecentChatMessages(phone, HISTORY_TURNS * 2, userId);
   const messages: CoreMessage[] = history.map((m) => ({
     role: m.role,
     content: m.body,
@@ -70,11 +71,11 @@ export async function handleIncomingMessage(
     maxTokens: 800,
     system: systemPrompt(),
     messages,
-    tools: buildBotTools(store),
+    tools: buildBotTools(store, userId),
   });
 
   const reply = result.text.trim() || 'sorry, I drew a blank — try again?';
-  await store.appendChatMessage(phone, 'assistant', reply);
+  await store.appendChatMessage(phone, 'assistant', reply, userId);
 
   const toolCalls = result.steps?.reduce((n, s) => n + s.toolCalls.length, 0) ?? 0;
   logger.info(

@@ -102,11 +102,12 @@ export interface DailyDigestResult {
  */
 export async function sendDailyDigest(
   store: StateStore,
+  userId?: number,
 ): Promise<DailyDigestResult> {
   const cfg = loadMetaConfig();
   const subjects = loadSubjects();
   const { startISO, endISO, label } = todayBoundsISO();
-  const rows = await store.listCalendarItems({ fromISO: startISO, toISO: endISO });
+  const rows = await store.listCalendarItems({ fromISO: startISO, toISO: endISO }, userId);
   const items = rows.map((r) => ({
     subjectId: r.subjectId,
     kind: r.kind,
@@ -132,6 +133,7 @@ export async function sendDailyDigest(
     cfg.recipient,
     'assistant',
     `[daily digest ${label}] ${body}`,
+    userId,
   );
   return { sent: true, count: items.length };
 }

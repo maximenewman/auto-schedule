@@ -2,6 +2,7 @@ import 'dotenv/config';
 import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
 import fastifyMultipart from '@fastify/multipart';
+import fastifyCookie from '@fastify/cookie';
 import { resolve, dirname } from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -37,6 +38,14 @@ async function main(): Promise<void> {
   await app.register(fastifyMultipart, {
     limits: { fileSize: 10 * 1024 * 1024, files: 1 },
   });
+
+  const cookieSecret = process.env.SESSION_SECRET;
+  if (!cookieSecret) {
+    throw new Error(
+      'SESSION_SECRET is not set — generate one with `node -e "console.log(require(\'node:crypto\').randomBytes(32).toString(\'base64\'))"`',
+    );
+  }
+  await app.register(fastifyCookie, { secret: cookieSecret });
 
   // Preserve the raw JSON bytes alongside the parsed body. The WhatsApp
   // webhook verifies an HMAC over the exact payload Meta sent, so we can't

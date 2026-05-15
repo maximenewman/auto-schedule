@@ -197,6 +197,7 @@ export interface BootstrapOptions {
   baseFolder: string;
   googleAuth: OAuth2Client;
   store: StateStore;
+  userId?: number;
   sourceLabel?: string;
 }
 
@@ -264,6 +265,7 @@ export async function bootstrapFromSchedule(
             event,
             opts.store,
             sourceLabel,
+            opts.userId,
           );
           if (r.action === 'inserted') result.eventsInserted++;
           else if (r.action === 'updated') result.eventsUpdated++;

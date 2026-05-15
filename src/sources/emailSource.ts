@@ -13,6 +13,7 @@ export class EmailSource implements SourceFetcher {
   constructor(
     auth: OAuth2Client,
     private readonly store: StateStore,
+    private readonly userId?: number,
   ) {
     this.gmail = google.gmail({ version: 'v1', auth });
   }
@@ -35,7 +36,7 @@ export class EmailSource implements SourceFetcher {
       .map((m) => m.id)
       .filter((id): id is string => typeof id === 'string');
     const seenFlags = await Promise.all(
-      allIds.map((id) => this.store.hasSeenEmail(subject.id, id)),
+      allIds.map((id) => this.store.hasSeenEmail(subject.id, id, this.userId)),
     );
     const messageIds = allIds.filter((_id, i) => !seenFlags[i]);
     logger.info(
@@ -71,7 +72,7 @@ export class EmailSource implements SourceFetcher {
   }
 
   async markProcessed(subject: Subject, _source: Source, item: SourceItem): Promise<void> {
-    await this.store.markEmailSeen(subject.id, item.sourceItemId);
+    await this.store.markEmailSeen(subject.id, item.sourceItemId, this.userId);
   }
 }
 

@@ -62,7 +62,7 @@ function resolveSubjectId(input: string, subjects: Subject[]): string | null {
   return byName?.id ?? null;
 }
 
-export function buildBotTools(store: StateStore) {
+export function buildBotTools(store: StateStore, userId?: number) {
   const subjects = loadSubjects();
 
   return {
@@ -98,7 +98,7 @@ export function buildBotTools(store: StateStore) {
         const rows = await store.listCalendarItems({
           fromISO: now.toISOString(),
           toISO: end.toISOString(),
-        });
+        }, userId);
         const filtered = kinds && kinds.length > 0
           ? rows.filter((r) => kinds.includes(r.kind as typeof kinds[number]))
           : rows;
@@ -124,7 +124,7 @@ export function buildBotTools(store: StateStore) {
       execute: async ({ query, includePast }) => {
         const q = query.toLowerCase();
         const fromISO = includePast ? undefined : new Date().toISOString();
-        const rows = await store.listCalendarItems({ fromISO });
+        const rows = await store.listCalendarItems({ fromISO }, userId);
         const hits = rows.filter(
           (r) =>
             r.summary.toLowerCase().includes(q) ||
@@ -171,7 +171,7 @@ export function buildBotTools(store: StateStore) {
           subjectId,
           fromISO: now.toISOString(),
           toISO: end.toISOString(),
-        });
+        }, userId);
         return {
           subjectId,
           subject: subjectLabel(subjects, subjectId),

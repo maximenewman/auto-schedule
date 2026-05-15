@@ -61,6 +61,7 @@ const COURSYS_UID_RE = /^\d{4}(?:sp|su|fa)([a-z]{2,4})(\d{2,3}[wu]?)(?:[a-z]\d+)
 export interface IcalSyncOptions {
   googleAuth: OAuth2Client;
   store: StateStore;
+  userId?: number;
   baseFolder?: string;
 }
 
@@ -162,6 +163,7 @@ export async function syncIcalSubscription(
         calEvent,
         opts.store,
         'ical:coursys',
+        opts.userId,
       );
       if (r.action === 'inserted') result.eventsInserted++;
       else if (r.action === 'updated') result.eventsUpdated++;
@@ -215,6 +217,7 @@ export async function runFullIcalSync(
     const { plan, warning: agentWarning } = await planDedup({
       store: opts.store,
       googleAuth: opts.googleAuth,
+      userId: opts.userId,
     });
     if (agentWarning) {
       logger.warn({ agentWarning }, 'ical: dedup agent returned a warning');
@@ -234,6 +237,7 @@ export async function runFullIcalSync(
           fromId: m.fromId,
           intoId: m.intoId,
           store: opts.store,
+          userId: opts.userId,
           googleAuth: opts.googleAuth,
           deleteGoogleEvents: true,
         });
@@ -256,6 +260,7 @@ export async function runFullIcalSync(
           canonicalEventId: m.canonicalEventId,
           redundantEventIds: m.redundantEventIds,
           store: opts.store,
+          userId: opts.userId,
           googleAuth: opts.googleAuth,
         });
         eventMerges++;
