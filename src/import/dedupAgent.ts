@@ -150,31 +150,56 @@ export async function planDedup(ctx: DedupCtx): Promise<DedupAgentResult> {
   );
   const events = await fetchEventsForDedup(ctx);
   const clusters = clusterByTimeConflict(events);
+  const validSubjectIds = new Set<string>(subjects.map((s) => s.id));
 
-  if (subjects.length < 2 && clusters.length === 0) {
-    return { plan: { subjectMerges: [], eventMerges: [] } };
+  // ---------------------------------------------------------------------
+  // Deterministic pre-pass: detect events that share an `itemId` but live
+  // under different `subjectId` prefixes. These are always the same logical
+  // iCal item duplicated by a prior subject-rename bug, and the LLM has
+  // historically wasted its entire token budget enumerating them one by
+  // one (then getting truncated). Resolving them here gives the LLM a
+  // smaller, more interesting input.
+  // ---------------------------------------------------------------------
+  const { autoMerges, remainingClusters } = preMergeBySharedItemId(
+    clusters,
+    validSubjectIds,
+  );
+  if (autoMerges.length > 0) {
+    logger.info(
+      { count: autoMerges.length },
+      'dedup: pre-pass collapsed shared-itemId duplicates',
+    );
   }
 
-  const prompt = buildPrompt(subjects, clusters);
+  // Nothing left worth asking the LLM about.
+  if (subjects.length < 2 && remainingClusters.length === 0) {
+    return { plan: { subjectMerges: [], eventMerges: autoMerges } };
+  }
+
+  const prompt = buildPrompt(subjects, remainingClusters);
   logger.info(
-    { subjects: subjects.length, clusters: clusters.length, model: DEFAULT_MODEL },
+    {
+      subjects: subjects.length,
+      clusters: remainingClusters.length,
+      autoMergesFromPrePass: autoMerges.length,
+      model: DEFAULT_MODEL,
+    },
     'dedup: asking agent',
   );
 
   // Build the set of event IDs the model is allowed to reference. Anything
   // outside this set is hallucinated and gets dropped before execution.
   const validEventIds = new Set<string>();
-  for (const cluster of clusters) for (const e of cluster) validEventIds.add(e.eventId);
-  const validSubjectIds = new Set<string>(subjects.map((s) => s.id));
+  for (const cluster of remainingClusters) for (const e of cluster) validEventIds.add(e.eventId);
 
   try {
     const result = await generateObject({
       model: getProvider()(DEFAULT_MODEL),
       schema: DedupPlanSchema,
       temperature: 0.1,
-      // 4000 fits ~80 merges; the prompt steers the model toward subjectMerges
-      // (which scale) so it should rarely come anywhere near this ceiling.
-      maxTokens: 4000,
+      // 8000 leaves headroom even if the model goes off-script. The
+      // pre-pass should keep the actual output tiny in normal cases.
+      maxTokens: 8000,
       // Encourage structured output via JSON-mode; the AI SDK already
       // schema-validates, but `mode: 'json'` makes the OpenAI-compatible
       // endpoint refuse to emit prose.
@@ -196,27 +221,35 @@ export async function planDedup(ctx: DedupCtx): Promise<DedupAgentResult> {
     const cleanedSubjectMerges = result.object.subjectMerges.filter(
       (m) => validSubjectIds.has(m.fromId) && validSubjectIds.has(m.intoId) && m.fromId !== m.intoId,
     );
-    // Also drop event merges that would be subsumed by a subject merge: if
-    // any referenced event row belongs to a `fromId` that is itself being
-    // merged, the subject pass will already delete those Google events.
+    // Correct each event merge so the canonical points at an event whose
+    // subjectId still exists in the user's subjects list. If the model
+    // picked a canonical tied to a deleted subject, swap it with a redundant
+    // that has a valid subject — otherwise post-merge the surviving event
+    // would have no owner in the UI.
+    const correctedEventMerges = cleanedEventMerges
+      .map((m) => correctCanonical(m, remainingClusters, validSubjectIds))
+      .filter((m): m is NonNullable<typeof m> => m !== null);
+
+    // Drop event merges that would be subsumed by a subject merge: if any
+    // referenced event row belongs to a `fromId` that is itself being merged,
+    // the subject pass will already delete those Google events.
     const fromIds = new Set(cleanedSubjectMerges.map((m) => m.fromId));
-    const subsumedFilter = cleanedEventMerges.filter((m) => {
+    const subsumedFilter = correctedEventMerges.filter((m) => {
       const all = [m.canonicalEventId, ...m.redundantEventIds];
       const subjectsTouched = new Set<string>();
       for (const id of all) {
-        for (const cluster of clusters) {
+        for (const cluster of remainingClusters) {
           const ev = cluster.find((e) => e.eventId === id);
           if (ev) subjectsTouched.add(ev.subjectId);
         }
       }
-      // Keep only if no event in this merge is under a subject scheduled for merge.
       for (const sid of subjectsTouched) if (fromIds.has(sid)) return false;
       return true;
     });
 
     const plan: DedupPlan = {
       subjectMerges: cleanedSubjectMerges,
-      eventMerges: subsumedFilter,
+      eventMerges: [...autoMerges, ...subsumedFilter],
     };
     logger.info(
       {
@@ -224,9 +257,10 @@ export async function planDedup(ctx: DedupCtx): Promise<DedupAgentResult> {
         completionTokens: result.usage?.completionTokens,
         subjectMerges: plan.subjectMerges.length,
         subjectsDropped: beforeSubjects - plan.subjectMerges.length,
-        eventMerges: plan.eventMerges.length,
+        autoEventMerges: autoMerges.length,
+        llmEventMerges: subsumedFilter.length,
         eventsDroppedHallucinated: beforeEvents - cleanedEventMerges.length,
-        eventsDroppedSubsumed: cleanedEventMerges.length - subsumedFilter.length,
+        eventsDroppedSubsumed: correctedEventMerges.length - subsumedFilter.length,
       },
       'dedup: agent returned plan',
     );
@@ -240,19 +274,29 @@ export async function planDedup(ctx: DedupCtx): Promise<DedupAgentResult> {
       // generateObject failed schema validation — usually because the model
       // got truncated mid-string or emitted prose. Try to salvage whatever
       // complete entries it managed before giving up.
-      const salvaged = salvagePartialPlan(err.text ?? '', validSubjectIds, validEventIds);
+      const salvaged = salvagePartialPlan(
+        err.text ?? '',
+        validSubjectIds,
+        validEventIds,
+        remainingClusters,
+      );
       if (salvaged) {
+        const combined: DedupPlan = {
+          subjectMerges: salvaged.subjectMerges,
+          eventMerges: [...autoMerges, ...salvaged.eventMerges],
+        };
         logger.warn(
           {
-            subjectMerges: salvaged.subjectMerges.length,
-            eventMerges: salvaged.eventMerges.length,
+            subjectMerges: combined.subjectMerges.length,
+            eventMerges: combined.eventMerges.length,
+            autoMergesPrepended: autoMerges.length,
             sample: err.text?.slice(0, 200),
           },
           'dedup: model output unparseable, salvaged partial plan via JSON repair',
         );
         return {
-          plan: salvaged,
-          warning: `agent output was truncated or invalid; recovered ${salvaged.subjectMerges.length} subject merge(s) + ${salvaged.eventMerges.length} event merge(s) via repair`,
+          plan: combined,
+          warning: `agent output was truncated; recovered ${combined.subjectMerges.length} subject merge(s) + ${combined.eventMerges.length} event merge(s) (${autoMerges.length} via deterministic pre-pass)`,
         };
       }
       logger.warn(
@@ -260,12 +304,96 @@ export async function planDedup(ctx: DedupCtx): Promise<DedupAgentResult> {
         'dedup: model produced unusable output and nothing was salvageable',
       );
       return {
-        plan: { subjectMerges: [], eventMerges: [] },
-        warning: 'agent returned no parseable plan',
+        plan: { subjectMerges: [], eventMerges: autoMerges },
+        warning: autoMerges.length > 0
+          ? `agent returned no parseable plan; using ${autoMerges.length} pre-pass merge(s) only`
+          : 'agent returned no parseable plan',
       };
     }
     throw err;
   }
+}
+
+/**
+ * Find clusters where multiple events share the same `itemId` but live under
+ * different `subjectId`s. That means the same source row produced N events
+ * because subject-renames happened over time. Merge them deterministically:
+ * canonical = the row whose `subjectId` currently exists in the user's
+ * subject list (so the surviving event still has a home in the UI).
+ */
+function preMergeBySharedItemId(
+  clusters: CalendarItemRow[][],
+  validSubjectIds: Set<string>,
+): {
+  autoMerges: DedupPlan['eventMerges'];
+  remainingClusters: CalendarItemRow[][];
+} {
+  const autoMerges: DedupPlan['eventMerges'] = [];
+  const remainingClusters: CalendarItemRow[][] = [];
+
+  for (const cluster of clusters) {
+    const byItemId = new Map<string, CalendarItemRow[]>();
+    for (const e of cluster) {
+      const bucket = byItemId.get(e.itemId);
+      if (bucket) bucket.push(e);
+      else byItemId.set(e.itemId, [e]);
+    }
+    const consumed = new Set<string>();
+    for (const [itemId, rows] of byItemId) {
+      if (rows.length < 2) continue;
+      // Sort: valid subject first, then shorter subjectId.
+      const sorted = [...rows].sort((a, b) => {
+        const aValid = validSubjectIds.has(a.subjectId);
+        const bValid = validSubjectIds.has(b.subjectId);
+        if (aValid !== bValid) return aValid ? -1 : 1;
+        return a.subjectId.length - b.subjectId.length;
+      });
+      const canonical = sorted[0]!;
+      const redundant = sorted.slice(1);
+      autoMerges.push({
+        canonicalEventId: canonical.eventId,
+        redundantEventIds: redundant.map((r) => r.eventId),
+        reason: `same iCal item "${itemId}" duplicated under subjects [${rows.map((r) => r.subjectId).join(', ')}]; keeping ${canonical.subjectId}`,
+      });
+      for (const r of rows) consumed.add(r.eventId);
+    }
+    const leftover = cluster.filter((e) => !consumed.has(e.eventId));
+    if (leftover.length >= 2) remainingClusters.push(leftover);
+  }
+  return { autoMerges, remainingClusters };
+}
+
+/** Make sure `canonicalEventId` belongs to a subject that still exists.
+ *  If not, swap it with a redundant id whose subject is valid. Returns null
+ *  if no event in the merge has a valid subject. */
+function correctCanonical(
+  m: { canonicalEventId: string; redundantEventIds: string[]; reason: string },
+  clusters: CalendarItemRow[][],
+  validSubjectIds: Set<string>,
+): { canonicalEventId: string; redundantEventIds: string[]; reason: string } | null {
+  const lookupSubject = (eventId: string): string | null => {
+    for (const cluster of clusters) {
+      const ev = cluster.find((e) => e.eventId === eventId);
+      if (ev) return ev.subjectId;
+    }
+    return null;
+  };
+  const canonicalSubject = lookupSubject(m.canonicalEventId);
+  if (canonicalSubject && validSubjectIds.has(canonicalSubject)) return m;
+  for (let i = 0; i < m.redundantEventIds.length; i++) {
+    const rid = m.redundantEventIds[i]!;
+    const rSubject = lookupSubject(rid);
+    if (rSubject && validSubjectIds.has(rSubject)) {
+      const newRedundant = [...m.redundantEventIds];
+      newRedundant[i] = m.canonicalEventId;
+      return {
+        canonicalEventId: rid,
+        redundantEventIds: newRedundant,
+        reason: `${m.reason} (canonical swapped to ${rid.slice(0, 12)}… because original pointed at a deleted subject)`,
+      };
+    }
+  }
+  return null;
 }
 
 /**
@@ -278,6 +406,7 @@ function salvagePartialPlan(
   text: string,
   validSubjectIds: Set<string>,
   validEventIds: Set<string>,
+  clusters: CalendarItemRow[][],
 ): DedupPlan | null {
   const subjectEntries = extractEntriesFromArray(text, 'subjectMerges');
   const eventEntries = extractEntriesFromArray(text, 'eventMerges');
@@ -306,14 +435,26 @@ function salvagePartialPlan(
     if (!canonical || !redundant || redundant.length === 0) continue;
     if (!validEventIds.has(canonical)) continue;
     if (!redundant.every((id) => validEventIds.has(id))) continue;
-    // Skip if a subject merge already covers this — same logic as the
-    // main path.
-    if (fromIds.size > 0) {
-      // No subject-id lookup here, just drop the merge if any subject is
-      // being merged (conservative — better to skip than redo).
-      continue;
+    // Drop if a subject merge already covers this — the subject pass deletes
+    // those Google events on its own.
+    const allIds = [canonical, ...redundant];
+    const subjectsTouched = new Set<string>();
+    for (const id of allIds) {
+      for (const cluster of clusters) {
+        const ev = cluster.find((c) => c.eventId === id);
+        if (ev) subjectsTouched.add(ev.subjectId);
+      }
     }
-    eventMerges.push({ canonicalEventId: canonical, redundantEventIds: redundant, reason: typeof obj.reason === 'string' ? obj.reason : '' });
+    let subsumed = false;
+    for (const sid of subjectsTouched) if (fromIds.has(sid)) { subsumed = true; break; }
+    if (subsumed) continue;
+
+    const corrected = correctCanonical(
+      { canonicalEventId: canonical, redundantEventIds: redundant, reason: typeof obj.reason === 'string' ? obj.reason : '' },
+      clusters,
+      validSubjectIds,
+    );
+    if (corrected) eventMerges.push(corrected);
   }
 
   return { subjectMerges, eventMerges };

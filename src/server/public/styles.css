@@ -318,6 +318,19 @@ button { font-family: inherit; cursor: pointer; border: 0; background: none; col
 .event.kind-midterm .ev-title::before {
   content: "* "; color: #d93025; font-size: 8px; vertical-align: 2px;
 }
+.event.event-allday {
+  padding: 3px 8px;
+  font-size: 10.5px;
+  background: var(--parchment);
+  border-color: var(--divider-soft);
+  /* Slightly more saturated left bar so it reads as a banner. */
+  border-left-width: 4px;
+}
+.event.event-allday .ev-title {
+  -webkit-line-clamp: 1;
+  letter-spacing: -0.1px;
+  margin-top: 0;
+}
 
 /* ============================================================
    Side rail (Today/Now)

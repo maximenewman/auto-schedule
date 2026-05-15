@@ -48,20 +48,37 @@ function WeekGrid({ weekStart, now, onEventClick }) {
               const subj = Util.subjectById(e.subjectId);
               if (!subj) return null;
               const isInstant = e.start.getTime() === e.end.getTime();
+              const sameDay = Util.sameDay(e.start, e.end);
               const startH = Util.hoursDecimal(e.start);
-              const endH = isInstant ? startH + 0.6 : Util.hoursDecimal(e.end);
+              // Events that end on a later day (all-day holidays, multi-day
+              // events) get their endH treated as midnight-tomorrow (24)
+              // rather than midnight-today (0). Without this, the
+              // `endH < HOUR_START` check below silently filters them out.
+              let endH;
+              if (isInstant) endH = startH + 0.6;
+              else if (!sameDay) endH = 24;
+              else endH = Util.hoursDecimal(e.end);
+              const isAllDay = !sameDay && startH === 0;
               if (endH < HOUR_START || startH > HOUR_END) return null;
-              const top = (Math.max(startH, HOUR_START) - HOUR_START) * HOUR_PX;
-              const height = (Math.min(endH, HOUR_END) - Math.max(startH, HOUR_START)) * HOUR_PX - 2;
+              // All-day events render as a thin banner pinned to the top of
+              // the day column instead of a full-column block.
+              const top = isAllDay
+                ? 0
+                : (Math.max(startH, HOUR_START) - HOUR_START) * HOUR_PX;
+              const height = isAllDay
+                ? 22
+                : (Math.min(endH, HOUR_END) - Math.max(startH, HOUR_START)) * HOUR_PX - 2;
               return (
                 <div key={e.itemId + e.start.toISOString()}
-                  className={"event kind-" + e.kind}
+                  className={"event kind-" + e.kind + (isAllDay ? " event-allday" : "")}
                   style={{ top, height, borderLeftColor: subj.color }}
                   onClick={() => onEventClick && onEventClick(e)}
-                  title={`${subj.code}  -  ${e.summary}  -  ${Util.fmtTime(e.start)}`}>
-                  <div className="ev-time">{isInstant ? `Due ${Util.fmtTime(e.start)}` : `${Util.fmtTime(e.start)}`}</div>
+                  title={`${subj.code}  -  ${e.summary}  -  ${isAllDay ? 'All day' : Util.fmtTime(e.start)}`}>
+                  {!isAllDay && (
+                    <div className="ev-time">{isInstant ? `Due ${Util.fmtTime(e.start)}` : `${Util.fmtTime(e.start)}`}</div>
+                  )}
                   <div className="ev-title">{subj.code}  -  {e.summary.replace(/^(Lecture|Tutorial|Office hours)  -  /, '')}</div>
-                  {e.room && height > 50 && <div className="ev-room">{e.room}</div>}
+                  {!isAllDay && e.room && height > 50 && <div className="ev-room">{e.room}</div>}
                 </div>
               );
             })}
