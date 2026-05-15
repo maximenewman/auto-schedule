@@ -19,26 +19,48 @@ window.SYNC_STATUS = {
   running: null,
 };
 
+// Defensive JSON fetcher: returns the fallback (default `null`) when the
+// request fails or the server responds with non-200. Without this every
+// 401/404/500 sent the caller a `{error}` object which then crashed when
+// callers expected an array.
+async function fetchJson(url, opts, fallback = null) {
+  try {
+    const res = await fetch(url, opts);
+    if (!res.ok) {
+      console.warn('fetchJson:', url, 'HTTP', res.status);
+      return fallback;
+    }
+    return await res.json();
+  } catch (err) {
+    console.warn('fetchJson:', url, err);
+    return fallback;
+  }
+}
+
 const api = {
-  subjects:    ()      => fetch('/api/subjects').then(r => r.json()),
-  subject:     (id)    => fetch(`/api/subjects/${id}`).then(r => r.json()),
+  subjects:    ()      => fetchJson('/api/subjects', undefined, []),
+  subject:     (id)    => fetchJson(`/api/subjects/${id}`),
   events:      (from, to) => {
     const params = new URLSearchParams();
     if (from) params.set('from', from);
     if (to)   params.set('to',   to);
     const q = params.toString();
-    return fetch(`/api/events${q ? '?' + q : ''}`).then(r => r.json());
+    return fetchJson(`/api/events${q ? '?' + q : ''}`, undefined, []);
   },
   subjEvents:  (id, from, to) => {
     const params = new URLSearchParams();
     if (from) params.set('from', from);
     if (to)   params.set('to',   to);
     const q = params.toString();
-    return fetch(`/api/subjects/${id}/events${q ? '?' + q : ''}`).then(r => r.json());
+    return fetchJson(`/api/subjects/${id}/events${q ? '?' + q : ''}`, undefined, []);
   },
-  files:       (id)    => fetch(`/api/subjects/${id}/files`).then(r => r.json()),
-  status:      ()      => fetch('/api/status').then(r => r.json()),
-  sync:        ()      => fetch('/api/sync', { method: 'POST' }).then(r => r.json()),
+  // `/api/subjects/:id/files` was retired in the multi-user refactor — the
+  // dashboard's file counts now come from a future object-storage backend.
+  // Keep the helper around so existing callers don't crash, but always
+  // resolve to an empty list.
+  files:       (_id)   => Promise.resolve([]),
+  status:      ()      => fetchJson('/api/status', undefined, window.SYNC_STATUS),
+  sync:        ()      => fetchJson('/api/sync', { method: 'POST' }, { started: false }),
 };
 
 window.api = api;
@@ -75,26 +97,30 @@ function hydrateFile(row) {
   };
 }
 
+function toArray(x) { return Array.isArray(x) ? x : []; }
+
 window.bootData = async function bootData() {
   const [subjects, events, status] = await Promise.all([
     api.subjects(),
     api.events(),
     api.status(),
   ]);
-  window.SUBJECTS = subjects;
-  window.EVENTS = events.map(hydrateEvent);
-  window.SYNC_STATUS = status;
+  window.SUBJECTS = toArray(subjects);
+  window.EVENTS = toArray(events).map(hydrateEvent);
+  if (status && typeof status === 'object') window.SYNC_STATUS = status;
 
-  // Files per subject  -  fan out, but only after we know the subject IDs.
+  // Files per subject — fan out, but only after we know the subject IDs.
+  // `api.files` is a stub right now (the endpoint was retired); the loop
+  // stays so when object-storage lands the call site is already shaped.
   const filesEntries = await Promise.all(
-    subjects.map(async (s) => [s.id, (await api.files(s.id)).map(hydrateFile)]),
+    window.SUBJECTS.map(async (s) => [s.id, toArray(await api.files(s.id)).map(hydrateFile)]),
   );
   window.SUBJECT_FILES = Object.fromEntries(filesEntries);
 };
 
-/** Refresh just the volatile bits  -  events + status. */
+/** Refresh just the volatile bits — events + status. */
 window.refreshData = async function refreshData() {
   const [events, status] = await Promise.all([api.events(), api.status()]);
-  window.EVENTS = events.map(hydrateEvent);
-  window.SYNC_STATUS = status;
+  window.EVENTS = toArray(events).map(hydrateEvent);
+  if (status && typeof status === 'object') window.SYNC_STATUS = status;
 };

@@ -377,10 +377,22 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
     const userId = req.userId!;
     const nowMs = Date.now();
     const weekAgo = new Date(nowMs - 7 * 24 * 60 * 60 * 1000).toISOString();
-    const allItems = await ctx.store.listCalendarItems({}, userId);
-    const itemsLastWeek = allItems.filter((e) => e.lastSyncedAt >= weekAgo).length;
     const lastRun = ctx.runState.lastRun;
-    const lastRunISO = lastRun?.finishedAt ?? null;
+
+    // Each sub-query is isolated so a single failing piece (missing
+    // migration, transient DB blip, unconfigured google tokens, etc.)
+    // can't 500 the whole status endpoint. The real error still hits the
+    // logs so we can see what to fix.
+    const safe = async <T>(name: string, fn: () => Promise<T>, fallback: T): Promise<T> => {
+      try { return await fn(); } catch (err) {
+        logger.error({ err, userId, sub: name }, 'status: sub-query failed');
+        return fallback;
+      }
+    };
+
+    const allItems = await safe('listCalendarItems', () =>
+      ctx.store.listCalendarItems({}, userId), []);
+    const itemsLastWeek = allItems.filter((e) => e.lastSyncedAt >= weekAgo).length;
     const itemsAddedLastRun = lastRun
       ? allItems.filter(
           (e) =>
@@ -388,12 +400,14 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
             e.lastSyncedAt <= lastRun.finishedAt,
         ).length
       : 0;
-    const [cookie, googleOk] = await Promise.all([
+    const cookie = await safe('coursysCookieAge', () =>
       coursysCookieAge(ctx.store, userId),
-      googleAuthExists(ctx.store, userId),
-    ]);
+      { ok: false, expiresInDays: null });
+    const googleOk = await safe('googleAuthExists', () =>
+      googleAuthExists(ctx.store, userId), false);
+
     return {
-      lastRunISO,
+      lastRunISO: lastRun?.finishedAt ?? null,
       nextRunISO: nextCronISO(),
       itemsAddedLastRun,
       itemsAddedLastWeek: itemsLastWeek,
