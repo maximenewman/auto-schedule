@@ -3,6 +3,7 @@ import {
   createSubject,
   findSubject,
   loadSubjects,
+  updateSubject,
   type Subject,
 } from '../config/subjectsStore.js';
 import type { Store } from '../state/store.js';
@@ -12,6 +13,8 @@ import { upsertEvent } from '../sync/calendar.js';
 import { parseIcal, type IcalEvent } from '../sources/icalParser.js';
 import { mergeSubject, mergeEvent } from './dedup.js';
 import { planDedup } from './dedupAgent.js';
+import { enrichSubjects, type EnrichProgress } from './enrichSubjects.js';
+import { pushMissingLocalEvents } from './reconcile.js';
 import { logger } from '../logger.js';
 
 export type IcalProgress =
@@ -19,10 +22,11 @@ export type IcalProgress =
   | { stage: 'fetch'; status: 'done'; fetched: number }
   | { stage: 'upsert'; status: 'start'; total: number }
   | { stage: 'upsert'; status: 'tick'; processed: number; total: number }
-  | { stage: 'upsert'; status: 'done'; inserted: number; updated: number; unchanged: number; failures: number; subjectsCreated: number }
+  | { stage: 'upsert'; status: 'done'; inserted: number; updated: number; unchanged: number; failures: number; subjectsCreated: number; restored?: number }
   | { stage: 'dedup'; status: 'analyzing' }
   | { stage: 'dedup'; status: 'tick'; processed: number; total: number; kind: 'subject' | 'event'; detail?: string }
   | { stage: 'dedup'; status: 'done'; subjectMerges: number; eventMerges: number; googleEventsDeleted: number; warning?: string }
+  | EnrichProgress
   | { stage: 'done'; result: IcalRunResult }
   | { stage: 'error'; message: string };
 
@@ -39,6 +43,10 @@ export interface IcalRunResult {
   eventMerges: number;
   googleEventsDeleted: number;
   dedupWarning?: string;
+  subjectsEnriched: number;
+  /** Local rows whose Google event had been deleted (manually or
+   *  otherwise) and that we re-pushed to Google during this run. */
+  eventsRestored: number;
 }
 
 export const ICAL_URL_SETTING = 'coursys.ical_url';
@@ -84,15 +92,45 @@ export interface IcalSyncResult {
 /** Event kinds that count as "the student is actively in this class".
  *  An iCal-only mention of a course with nothing but holidays / generic
  *  metadata won't anchor a new subject card. */
-const ACTIVE_KINDS = new Set(['lecture', 'tutorial', 'assignment', 'midterm', 'exam']);
+const ACTIVE_KINDS = new Set([
+  'lecture',
+  'tutorial',
+  'lab',
+  'seminar',
+  'assignment',
+  'midterm',
+  'exam',
+]);
 
 /** A course only anchors a subject card if it has at least one
- *  lecture/tutorial/deadline that ends today or later. Past-term courses
- *  the CourSys feed still emits (CMPT 426 from Fall 2025 etc) fail this
- *  check and don't get created. */
+ *  lecture/tutorial/lab/seminar/deadline that ends today or later.
+ *
+ *  For recurring events the iCal feed exposes DTSTART/DTEND of the *first*
+ *  occurrence and the series end in the RRULE's `UNTIL` clause. Using
+ *  `ev.dtend` alone made every recurring course look "past" after the
+ *  first week of term — we now peek into the RRULE so a Mon-13:30 lecture
+ *  still anchors its subject through August. */
 function isActiveAnchor(ev: IcalEvent, todayMs: number): boolean {
   if (isHoliday(ev)) return false;
   if (!ACTIVE_KINDS.has(kindFor(ev))) return false;
+
+  // Recurring → use the RRULE's UNTIL (or assume ongoing if absent).
+  if (ev.rrule) {
+    const m = /UNTIL=(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})Z?)?/.exec(ev.rrule);
+    if (m) {
+      const untilMs = Date.UTC(
+        Number(m[1]),
+        Number(m[2]) - 1,
+        Number(m[3]),
+        Number(m[4] ?? '23'),
+        Number(m[5] ?? '59'),
+        Number(m[6] ?? '59'),
+      );
+      return untilMs >= todayMs;
+    }
+    return true; // no UNTIL → open-ended recurrence, treat as active
+  }
+
   const endMs = Date.parse(ev.dtend);
   if (Number.isNaN(endMs)) return false;
   return endMs >= todayMs;
@@ -155,7 +193,12 @@ export async function syncIcalSubscription(
     if (code) activeCodes.add(normalizeCode(code));
   }
   logger.info(
-    { activeCodes: [...activeCodes] },
+    {
+      activeCodes: [...activeCodes],
+      todayUtcMs: todayMs,
+      todayIso: new Date(todayMs).toISOString(),
+      cachedSubjects: [...subjectCache.keys()],
+    },
     'ical: active course codes for this sync',
   );
 
@@ -196,12 +239,62 @@ export async function syncIcalSubscription(
         // ending today or later.
         if (!activeCodes.has(normalizeCode(code))) {
           result.skippedInactive++;
+          logger.debug(
+            {
+              uid: ev.uid,
+              code,
+              normalisedCode: normalizeCode(code),
+              kind: kindFor(ev),
+              dtend: ev.dtend,
+            },
+            'ical: skip event — subject not cached and course code is inactive',
+          );
           continue;
         }
-        subject = await autoCreateSubject(opts.store, code, baseFolder, opts.userId);
+        // Stamp the subject with the section + term we just saw the
+        // student enrolled in. If this first event is a TUT/LAB the LEC
+        // backfill below will overwrite to the canonical D100 section.
+        const initialSection = kindFor(ev) === 'lecture'
+          ? sectionFromUid(ev.uid)
+          : null;
+        const initialTerm = termFromUid(ev.uid);
+        subject = await autoCreateSubject(
+          opts.store, code, baseFolder, opts.userId, initialSection, initialTerm,
+        );
         subjectCache.set(normalizeCode(subject.id), subject);
         subjectCache.set(normalizeCode(code), subject);
         result.subjectsCreated++;
+      } else {
+        // Backfill pass for pre-existing subjects: top up missing section
+        // and/or term from this event's UID. Older rows were auto-created
+        // before these fields were tracked, and the sfucourses enrichment
+        // can't run without `term`.
+        const patch: Partial<Subject> = {};
+        if (!subject.section && kindFor(ev) === 'lecture') {
+          const lectureSection = sectionFromUid(ev.uid);
+          if (lectureSection) patch.section = lectureSection;
+        }
+        if (!subject.term) {
+          const t = termFromUid(ev.uid);
+          if (t) patch.term = t;
+        }
+        if (Object.keys(patch).length > 0) {
+          subject = { ...subject, ...patch };
+          try {
+            await updateSubject(opts.store, subject.id, subject, opts.userId);
+            subjectCache.set(normalizeCode(subject.id), subject);
+            subjectCache.set(normalizeCode(code), subject);
+            logger.info(
+              { subjectId: subject.id, patched: Object.keys(patch) },
+              'ical: backfilled missing subject fields',
+            );
+          } catch (err) {
+            logger.warn(
+              { err: (err as Error).message, subjectId: subject.id, patch },
+              'ical: failed to backfill subject',
+            );
+          }
+        }
       }
     }
     result.attributed++;
@@ -216,13 +309,28 @@ export async function syncIcalSubscription(
         'ical:coursys',
         opts.userId,
       );
-      if (r.action === 'inserted') result.eventsInserted++;
-      else if (r.action === 'updated') result.eventsUpdated++;
-      else result.eventsUnchanged++;
+      if (r.action === 'inserted') {
+        result.eventsInserted++;
+        logger.info(
+          { subjectId: subject.id, itemId: calEvent.itemId, eventId: r.eventId, kind: calEvent.kind },
+          'ical: inserted on Google',
+        );
+      } else if (r.action === 'updated') {
+        result.eventsUpdated++;
+      } else {
+        result.eventsUnchanged++;
+      }
     } catch (err) {
       result.failures++;
       logger.error(
-        { err, uid: ev.uid, subjectId: subject.id },
+        {
+          err: (err as Error).message,
+          stack: (err as Error).stack,
+          uid: ev.uid,
+          subjectId: subject.id,
+          itemId: calEvent.itemId,
+          summary: calEvent.summary,
+        },
         'ical: calendar upsert failed',
       );
     }
@@ -245,7 +353,21 @@ export async function syncIcalSubscription(
     failures: result.failures,
     subjectsCreated: result.subjectsCreated,
   });
-  logger.info(result, 'ical: sync finished');
+  // Loud summary — useful when triaging "nothing's happening" reports.
+  logger.info(
+    {
+      fetched: result.fetched,
+      attributed: result.attributed,
+      unattributed: result.unattributed,
+      subjectsCreated: result.subjectsCreated,
+      skippedInactive: result.skippedInactive,
+      inserted: result.eventsInserted,
+      updated: result.eventsUpdated,
+      unchanged: result.eventsUnchanged,
+      failures: result.failures,
+    },
+    'ical: sync finished',
+  );
   return result;
 }
 
@@ -262,7 +384,79 @@ export async function runFullIcalSync(
   onProgress?: (e: IcalProgress) => void,
 ): Promise<IcalRunResult> {
   try {
-    const sync = await syncIcalSubscription(url, opts, onProgress);
+    // The inner sync emits `upsert.done` as soon as the iCal upsert loop
+    // finishes. We hold that event back, run the reconcile push as part
+    // of the same visual phase, then emit one combined `upsert.done` so
+    // the UI doesn't flicker between "done" and "running" mid-sync.
+    // Use the specific upsert.done shape so TS doesn't narrow the value
+    // away in the closure capture.
+    type UpsertDone = Extract<IcalProgress, { stage: 'upsert'; status: 'done' }>;
+    let pendingUpsertDone: UpsertDone | null = null;
+    const wrappedProgress = (e: IcalProgress) => {
+      if (e.stage === 'upsert' && e.status === 'done') {
+        pendingUpsertDone = e;
+        return;
+      }
+      onProgress?.(e);
+    };
+    const sync = await syncIcalSubscription(url, opts, wrappedProgress);
+
+    // Local DB is the source of truth: anything in `calendar_items` that
+    // Google no longer has gets re-pushed. This makes a user-deleted
+    // Google event come back on the next sync. We stream it as more
+    // `upsert.tick` events so the UI keeps showing a single "Sync to
+    // Google Calendar" row.
+    let eventsRestored = 0;
+    try {
+      const upsertBase = sync.fetched; // tick numbers continue from here
+      const push = await pushMissingLocalEvents(
+        opts.googleAuth,
+        opts.store,
+        opts.userId,
+        ({ pushed, total, subjectId }) => {
+          onProgress?.({
+            stage: 'upsert',
+            status: 'tick',
+            processed: upsertBase + pushed,
+            total: upsertBase + total,
+          });
+          void subjectId;
+        },
+      );
+      eventsRestored = push.pushed;
+      if (push.pushed > 0 || push.failures > 0) {
+        logger.info(
+          {
+            googleCount: push.googleCount,
+            pushed: push.pushed,
+            failures: push.failures,
+          },
+          'ical: restored events missing on Google',
+        );
+      }
+    } catch (err) {
+      logger.warn(
+        { err: (err as Error).message },
+        'ical: reconcile-push failed (non-fatal)',
+      );
+    }
+
+    // Emit the now-combined upsert.done — append the restored count so
+    // the UI can show it in the phase's detail line.
+    const pending = pendingUpsertDone as UpsertDone | null;
+    if (pending) {
+      onProgress?.({ ...pending, restored: eventsRestored });
+    } else {
+      onProgress?.({
+        stage: 'upsert', status: 'done',
+        inserted: sync.eventsInserted,
+        updated: sync.eventsUpdated,
+        unchanged: sync.eventsUnchanged,
+        failures: sync.failures,
+        subjectsCreated: sync.subjectsCreated,
+        restored: eventsRestored,
+      });
+    }
 
     onProgress?.({ stage: 'dedup', status: 'analyzing' });
     const { plan, warning: agentWarning } = await planDedup({
@@ -282,6 +476,16 @@ export async function runFullIcalSync(
     // Subjects first: merging a subject re-attributes its events, which keeps
     // the subsequent event-merge plan coherent (canonical event ids stay
     // valid).
+    if (plan.subjectMerges.length > 0 || plan.eventMerges.length > 0) {
+      logger.info(
+        {
+          subjectMergeCount: plan.subjectMerges.length,
+          eventMergeCount: plan.eventMerges.length,
+          subjectMerges: plan.subjectMerges.map((m) => `${m.fromId}->${m.intoId}`),
+        },
+        'ical: dedup will run — Google events may be deleted',
+      );
+    }
     for (const m of plan.subjectMerges) {
       try {
         const r = await mergeSubject({
@@ -333,6 +537,20 @@ export async function runFullIcalSync(
       warning: agentWarning,
     });
 
+    // Best-effort enrichment from api.sfucourses.com — fills professor names
+    // for subjects iCal/announcements created with placeholder values.
+    let subjectsEnriched = 0;
+    try {
+      const enrichResult = await enrichSubjects({
+        store: opts.store,
+        userId: opts.userId,
+        onProgress: (e) => onProgress?.(e),
+      });
+      subjectsEnriched = enrichResult.filled;
+    } catch (err) {
+      logger.warn({ err: (err as Error).message }, 'ical: enrichment failed');
+    }
+
     const result: IcalRunResult = {
       fetched: sync.fetched,
       attributed: sync.attributed,
@@ -346,6 +564,8 @@ export async function runFullIcalSync(
       eventMerges,
       googleEventsDeleted: googleDeleted,
       dedupWarning: agentWarning,
+      subjectsEnriched,
+      eventsRestored,
     };
     onProgress?.({ stage: 'done', result });
     return result;
@@ -410,11 +630,26 @@ function isHoliday(ev: IcalEvent): boolean {
   return ev.categories.some((c) => c.toUpperCase() === 'HOLIDAY');
 }
 
+/** Extract the term label from a CourSys UID. `2026sucmpt307d1-…` →
+ *  "Summer 2026". Used so subjects auto-created from iCal carry a term
+ *  the sfucourses enrichment can map to its `YYYY-season` query param. */
+function termFromUid(uid: string): string | null {
+  const m = /^(\d{4})(sp|su|fa)/i.exec(uid);
+  if (!m) return null;
+  const season =
+    m[2]!.toLowerCase() === 'sp' ? 'Spring' :
+    m[2]!.toLowerCase() === 'su' ? 'Summer' :
+    'Fall';
+  return `${season} ${m[1]}`;
+}
+
 async function autoCreateSubject(
   store: Store,
   code: string,
   baseFolder: string,
   userId?: number,
+  section?: string | null,
+  term?: string | null,
 ): Promise<Subject> {
   const id = code.replace(/\s+/g, '').toLowerCase();
   const base = baseFolder.replace(/[\\/]+$/, '').replace(/\\/g, '/');
@@ -426,9 +661,14 @@ async function autoCreateSubject(
     destinationFolder: `${base}/${code}`,
     sources: [],
   };
+  if (section) subject.section = section;
+  if (term) subject.term = term;
   try {
     await createSubject(store, subject, userId);
-    logger.info({ id, code }, 'ical: auto-created subject');
+    logger.info(
+      { id, code, section: section ?? null, term: term ?? null },
+      'ical: auto-created subject',
+    );
   } catch (err) {
     // Race between subjectCache lookup and DB write — createSubject throws on
     // conflict. Re-read the row instead so we use the existing one.
@@ -468,18 +708,75 @@ async function autoCreateHolidaysSubject(
 }
 
 function toCalendarEvent(ev: IcalEvent, code: string): CalendarEvent {
+  const kind = kindFor(ev);
   const event: CalendarEvent = {
     itemId: itemIdFromUid(ev.uid),
-    kind: kindFor(ev),
-    summary: ev.summary || code,
+    kind,
+    // Rewrite "STAT 271 LEC" → "STAT 271 Lecture" so the LLM dedup agent
+    // recognises this as the same physical session as the PDF bootstrap's
+    // "STAT 271 Lecture" output.
+    summary: normalizeSummary(ev.summary || code, code, kind),
     description: ev.description,
     room: ev.location,
     startDateTime: ev.dtstart,
     endDateTime: ev.dtend,
     attachments: [],
+    sectionCode: sectionFromUid(ev.uid),
   };
   if (ev.rrule) event.recurrence = [ev.rrule];
   return event;
+}
+
+/** Pull the SFU section out of a CourSys UID. UID prefix `…cmpt307d1-…`
+ *  encodes section "D1", which SFU formally numbers as "D100" (each step
+ *  of the trailing digit corresponds to a hundreds bucket: d1→D100,
+ *  d2→D200, …). Returns null when the UID doesn't follow the CourSys
+ *  pattern (foreign feeds, malformed entries). */
+function sectionFromUid(uid: string): string | null {
+  const m = /^\d{4}(?:sp|su|fa)[a-z]{2,4}\d{2,3}[wu]?([a-z])(\d+)-/i.exec(uid);
+  if (!m) return null;
+  const letter = m[1]!.toUpperCase();
+  const bucket = Number(m[2]) * 100;
+  return `${letter}${bucket}`;
+}
+
+function kindWord(kind: EventKind): string {
+  switch (kind) {
+    case 'lecture':      return 'Lecture';
+    case 'tutorial':     return 'Tutorial';
+    case 'lab':          return 'Lab';
+    case 'seminar':      return 'Seminar';
+    case 'office-hours': return 'Office Hours';
+    case 'midterm':      return 'Midterm';
+    case 'exam':         return 'Exam';
+    case 'assignment':   return 'Assignment';
+    default:             return '';
+  }
+}
+
+/** Rewrite CourSys-style summaries ("STAT 271 D100 LEC", "CMPT 307 LEC") so
+ *  they match the PDF-bootstrap format ("STAT 271 Lecture"). The dedup
+ *  agent's deterministic pre-pass keys on (subject, time, kind), not the
+ *  summary, but a consistent label also makes UI lists less noisy. */
+function normalizeSummary(raw: string, code: string, kind: EventKind): string {
+  const word = kindWord(kind);
+  if (!word) return raw;
+  // Pull off any leading "<DEPT> <NUM>" so we don't end up with
+  // "CMPT 307 CMPT 307 Lecture".
+  const codeRe = new RegExp(`^\\s*${escapeRe(code)}\\b\\s*`, 'i');
+  const withoutCode = raw.replace(codeRe, '').trim();
+  // Drop the all-caps section / kind tokens CourSys glues on (e.g. "D100 LEC").
+  const cleaned = withoutCode
+    .replace(/\b(LEC|TUT|LAB|SEM|MIDT|EXAM|FINAL|OH)\b/gi, '')
+    .replace(/\b[A-Z]\d{2,4}\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const tail = cleaned ? ` ${cleaned}` : '';
+  return `${code} ${word}${tail}`.replace(/\s+/g, ' ').trim();
+}
+
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function itemIdFromUid(uid: string): string {
@@ -494,19 +791,22 @@ function kindFor(ev: IcalEvent): EventKind {
   // CourSys uses fixed-length codes in CATEGORIES  -  match them exactly.
   if (cats.includes('HOLIDAY')) return 'other';
   if (cats.includes('MIDT')) return 'midterm';
-  if (cats.includes('EXAM') || cats.includes('FINAL')) return 'exam';
+  if (cats.includes('EXAM') || cats.includes('FINAL') || cats.includes('QUIZ')) return 'exam';
   if (cats.includes('LEC')) return 'lecture';
   if (cats.includes('TUT')) return 'tutorial';
-  // No 'lab' kind in our enum; tutorials and labs render the same way.
-  if (cats.includes('LAB')) return 'tutorial';
+  if (cats.includes('LAB')) return 'lab';
+  if (cats.includes('SEM')) return 'seminar';
   if (cats.includes('OH') || cats.includes('OFFICE')) return 'office-hours';
   // Fall back to summary keywords for non-CourSys feeds.
   const sum = ev.summary.toLowerCase();
   if (sum.includes('midterm')) return 'midterm';
+  if (sum.includes('quiz')) return 'exam';
   if (sum.includes('exam') || sum.includes('final')) return 'exam';
   if (sum.includes('office hour')) return 'office-hours';
   if (sum.includes('due') || sum.includes('assignment') || sum.includes('homework')) return 'assignment';
   if (sum.includes('tutorial')) return 'tutorial';
+  if (sum.includes('seminar')) return 'seminar';
+  if (sum.includes(' lab ') || sum.endsWith(' lab')) return 'lab';
   if (sum.includes('lecture')) return 'lecture';
   return 'other';
 }

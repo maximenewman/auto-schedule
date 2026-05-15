@@ -8,6 +8,8 @@ export const AttachmentSchema = z.object({
 export const EVENT_KINDS = [
   'lecture',
   'tutorial',
+  'lab',
+  'seminar',
   'office-hours',
   'assignment',
   'midterm',
@@ -22,7 +24,7 @@ export const CalendarEventSchema = z.object({
     .string()
     .describe("Stable natural ID: 'a3', 'midterm-1', 'lec-2025-05-15'"),
   kind: EventKindSchema.describe(
-    'Classification: lecture, tutorial, office-hours, assignment, midterm, exam, or other.',
+    'Classification: lecture, tutorial, lab, seminar, office-hours, assignment, midterm, exam, or other. Quizzes count as exam.',
   ),
   summary: z.string().describe("e.g. 'CMPT 307: Assignment 3 due'"),
   description: z.string(),
@@ -42,6 +44,12 @@ export const CalendarEventSchema = z.object({
     .describe(
       'Optional iCalendar RRULE strings, e.g. ["RRULE:FREQ=WEEKLY;BYDAY=TU;UNTIL=20260811T065959Z"]. Used for class meetings; leave undefined for one-off events.',
     ),
+  /** SFU section code, e.g. "D100" for a lecture or "D101" for a tutorial.
+   *  Populated from the CourSys UID when known (iCal → "d1" maps to "D100"),
+   *  used downstream by the SFU course-outlines enrichment to pick the
+   *  right section's instructor list. Not sent to Google Calendar — kept
+   *  on the local calendar_items row only. */
+  sectionCode: z.string().nullable().optional(),
 });
 
 export const CalendarEventListSchema = z.object({

@@ -23,6 +23,7 @@ export interface CalendarItemRow {
   room: string | null;
   attachments: { url: string; filename: string }[];
   recurrence: string[] | null;
+  sectionCode: string | null;
   sourceLabel: string | null;
   lastSyncedAt: string;
 }
@@ -267,18 +268,19 @@ export class Store {
     // value and stores it as a jsonb string scalar instead of an array.
     const recurrence =
       event.recurrence && event.recurrence.length > 0 ? event.recurrence : null;
+    const sectionCode = event.sectionCode ?? null;
     await this.sql`
       INSERT INTO calendar_items (
         user_id, event_id, subject_id, item_id, kind, summary, description,
-        start_iso, end_iso, room, attachments, recurrence, source_label,
-        last_synced_at
+        start_iso, end_iso, room, attachments, recurrence, section_code,
+        source_label, last_synced_at
       ) VALUES (
         ${userId}, ${eventId}, ${subjectId}, ${event.itemId}, ${event.kind},
         ${event.summary}, ${event.description}, ${event.startDateTime},
         ${event.endDateTime}, ${event.room},
         ${this.sql.json(event.attachments)},
         ${recurrence === null ? null : this.sql.json(recurrence)},
-        ${sourceLabel}, now()
+        ${sectionCode}, ${sourceLabel}, now()
       )
       ON CONFLICT (user_id, event_id) DO UPDATE SET
         subject_id = EXCLUDED.subject_id,
@@ -291,6 +293,7 @@ export class Store {
         room = EXCLUDED.room,
         attachments = EXCLUDED.attachments,
         recurrence = EXCLUDED.recurrence,
+        section_code = COALESCE(EXCLUDED.section_code, calendar_items.section_code),
         source_label = EXCLUDED.source_label,
         last_synced_at = EXCLUDED.last_synced_at
     `;
@@ -318,6 +321,7 @@ export class Store {
         room: string | null;
         attachments: unknown;
         recurrence: unknown;
+        sectionCode: string | null;
         sourceLabel: string | null;
         lastSyncedAt: string;
       }>
@@ -334,6 +338,7 @@ export class Store {
         room            AS "room",
         attachments     AS "attachments",
         recurrence      AS "recurrence",
+        section_code    AS "sectionCode",
         source_label    AS "sourceLabel",
         last_synced_at  AS "lastSyncedAt"
       FROM calendar_items
@@ -355,6 +360,7 @@ export class Store {
       room: r.room,
       attachments: normalizeAttachments(r.attachments),
       recurrence: normalizeRecurrence(r.recurrence),
+      sectionCode: r.sectionCode,
       sourceLabel: r.sourceLabel,
       lastSyncedAt: typeof r.lastSyncedAt === 'string'
         ? r.lastSyncedAt
@@ -596,6 +602,7 @@ export class Store {
         name,
         professor,
         room,
+        section,
         term,
         color,
         destination_folder AS "destinationFolder",
@@ -618,6 +625,7 @@ export class Store {
         name,
         professor,
         room,
+        section,
         term,
         color,
         destination_folder AS "destinationFolder",
@@ -635,11 +643,12 @@ export class Store {
     try {
       await this.sql`
         INSERT INTO subjects (
-          user_id, id, code, name, professor, room, term, color,
+          user_id, id, code, name, professor, room, section, term, color,
           destination_folder, sources, created_at, updated_at
         ) VALUES (
           ${userId}, ${subject.id}, ${subject.code ?? null}, ${subject.name},
-          ${subject.professor}, ${subject.room ?? null}, ${subject.term ?? null},
+          ${subject.professor}, ${subject.room ?? null},
+          ${subject.section ?? null}, ${subject.term ?? null},
           ${subject.color ?? null}, ${subject.destinationFolder},
           ${this.sql.json(subject.sources)}, now(), now()
         )
@@ -662,6 +671,7 @@ export class Store {
         name = ${subject.name},
         professor = ${subject.professor},
         room = ${subject.room ?? null},
+        section = ${subject.section ?? null},
         term = ${subject.term ?? null},
         color = ${subject.color ?? null},
         destination_folder = ${subject.destinationFolder},
@@ -814,6 +824,7 @@ interface SubjectDbRow {
   name: string;
   professor: string;
   room: string | null;
+  section: string | null;
   term: string | null;
   color: string | null;
   destinationFolder: string;
@@ -833,6 +844,7 @@ function rowToSubject(row: SubjectDbRow): Subject {
   };
   if (row.code !== null) out.code = row.code;
   if (row.room !== null) out.room = row.room;
+  if (row.section !== null) out.section = row.section;
   if (row.term !== null) out.term = row.term;
   if (row.color !== null) out.color = row.color;
   return out;

@@ -114,8 +114,26 @@ function kindFor(sectionType: string): CalendarEvent['kind'] {
   switch (sectionType) {
     case 'LEC': return 'lecture';
     case 'TUT': return 'tutorial';
-    case 'SEM': return 'lecture';
+    case 'LAB': return 'lab';
+    case 'SEM': return 'seminar';
     default: return 'other';
+  }
+}
+
+// Title-case the kind for human-facing summaries so PDF events read
+// "STAT 271 Lecture" — matching what the iCal extractor + dedup agent
+// see for the same physical session.
+function kindLabel(kind: CalendarEvent['kind']): string {
+  switch (kind) {
+    case 'lecture':      return 'Lecture';
+    case 'tutorial':     return 'Tutorial';
+    case 'lab':          return 'Lab';
+    case 'seminar':      return 'Seminar';
+    case 'office-hours': return 'Office Hours';
+    case 'assignment':   return 'Assignment';
+    case 'midterm':      return 'Midterm';
+    case 'exam':         return 'Exam';
+    default:             return 'Event';
   }
 }
 
@@ -139,7 +157,11 @@ function buildEvent(course: SfuCourse, section: SfuSection, meeting: SfuMeeting)
   const startDateTime = localIso(dtStartDate, meeting.startTime);
   const endDateTime = localIso(dtStartDate, meeting.endTime);
 
-  const summaryBits = [course.code, section.type];
+  // Build a summary that matches what the CourSys iCal feed emits for the
+  // same physical session (e.g. "STAT 271 Lecture") so the LLM dedup agent
+  // can recognise PDF and iCal copies of the same event.
+  const kind = kindFor(section.type);
+  const summaryBits = [course.code, kindLabel(kind)];
   if (section.type !== 'LEC' && section.code) summaryBits.push(section.code);
   const summary = summaryBits.join(' ');
 
@@ -154,13 +176,15 @@ function buildEvent(course: SfuCourse, section: SfuSection, meeting: SfuMeeting)
 
   const event: CalendarEvent = {
     itemId: itemIdFor(section, meeting),
-    kind: kindFor(section.type),
+    kind,
     summary,
     description: descLines.join('\n'),
     room: meeting.location,
     startDateTime,
     endDateTime,
     attachments: [],
+    // PDF schedule already includes the full section code (e.g. "D100").
+    sectionCode: section.code || null,
   };
 
   if (meeting.recurring) {
@@ -185,6 +209,7 @@ function mergeSubject(existing: Subject, next: Subject): Subject {
     name: existing.name || next.name,
     professor: existing.professor || next.professor,
     room: existing.room ?? next.room,
+    section: existing.section ?? next.section,
     term: existing.term ?? next.term,
     color: existing.color ?? next.color,
     destinationFolder: existing.destinationFolder || next.destinationFolder,
@@ -226,6 +251,8 @@ export async function bootstrapFromSchedule(
   const term = termLabel(schedule.term);
   for (const course of schedule.courses) {
     const id = subjectIdFor(course);
+    const lecSection = course.sections.find((s) => s.type === 'LEC')?.code
+      ?? course.sections[0]?.code;
     const next: Subject = {
       id,
       code: course.code,
@@ -235,6 +262,7 @@ export async function bootstrapFromSchedule(
       destinationFolder: destinationFolderFor(opts.baseFolder, course),
       sources: [],
     };
+    if (lecSection) next.section = lecSection;
 
     const existing = await findSubject(opts.store, id, opts.userId);
     if (!existing) {

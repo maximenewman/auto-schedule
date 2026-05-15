@@ -86,10 +86,17 @@ export async function listGoogleEvents(
     if (!startISO || !endISO) continue;
 
     // For recurring instances Google emits `<masterId>_<occurrenceTimestamp>`
-    // and exposes `recurringEventId` pointing at the master. Either one
-    // should match a row we wrote when bootstrapping / syncing.
+    // and exposes `recurringEventId` pointing at the master. The local row
+    // may have been written under EITHER form depending on its history:
+    //   - PDF bootstrap → recordLocal under the master id
+    //   - iCal sync after a dedup redirect → recordLocal under whatever the
+    //     redirect target was, which is often a per-occurrence id like
+    //     `master_20260603T203000Z`
+    // Try the occurrence id first, fall back to the master id. Without
+    // this most events end up "unattributed via local" and disappear
+    // from the dashboard.
     const masterKey = ev.recurringEventId ?? ev.id;
-    const local = localById.get(masterKey);
+    const local = (ev.id ? localById.get(ev.id) : undefined) ?? localById.get(masterKey);
 
     let subjectId: string;
     let itemId: string;
@@ -147,6 +154,7 @@ export async function listGoogleEvents(
       room: ev.location ?? cachedRoom,
       attachments,
       recurrence: null,
+      sectionCode: local?.sectionCode ?? null,
       sourceLabel,
       lastSyncedAt,
     });

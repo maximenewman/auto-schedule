@@ -28,6 +28,7 @@ import { syncIcalSubscription, runFullIcalSync, ICAL_URL_SETTING, type IcalProgr
 import { syncAtomSubscription, ATOM_URL_SETTING, type AtomProgress } from '../import/atomSync.js';
 import { mergeSubject, mergeEvent } from '../import/dedup.js';
 import { planDedup } from '../import/dedupAgent.js';
+import { deleteSubjectAndCalendar } from '../import/reconcile.js';
 import { getAuthorizedClient } from '../auth/google.js';
 import { listGoogleEvents } from '../sync/calendarRead.js';
 import type { OAuth2Client } from 'google-auth-library';
@@ -85,6 +86,7 @@ function serializeSubject(s: Subject) {
     professor: s.professor,
     term: s.term ?? '',
     room: s.room ?? null,
+    section: s.section ?? null,
     color: colorForSubject(s),
     destinationFolder: s.destinationFolder,
     sources: s.sources,
@@ -348,8 +350,16 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
     const userId = req.userId!;
     const { id } = req.params as { id: string };
     try {
-      await deleteSubject(ctx.store, id, userId);
-      return reply.code(204).send();
+      const existing = await findSubject(ctx.store, id, userId);
+      if (!existing) {
+        return reply.code(404).send({ error: `subject "${id}" not found` });
+      }
+      // Cascade through Google Calendar first so the deletion is visible
+      // there. If Google auth is missing we still purge the local rows so
+      // the dashboard reflects the deletion immediately.
+      const auth = await getAuth(userId);
+      const result = await deleteSubjectAndCalendar(id, ctx.store, auth, userId);
+      return reply.code(200).send(result);
     } catch (err) {
       return mapMutationError(err, reply);
     }

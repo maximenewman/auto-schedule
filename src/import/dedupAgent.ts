@@ -357,10 +357,63 @@ function preMergeBySharedItemId(
       });
       for (const r of rows) consumed.add(r.eventId);
     }
+    // Second-tier merge inside the same cluster: events that share
+    //   (subjectId, startISO, endISO) and have compatible kinds are the
+    // same physical session sourced twice (PDF + iCal). Canonical = the
+    // event with the more specific room ("Shrum Science Centre …" beats
+    // "Burnaby Campus C9002"), source preference as tiebreaker.
+    const leftoverAfterItem = cluster.filter((e) => !consumed.has(e.eventId));
+    const byTimeKey = new Map<string, CalendarItemRow[]>();
+    for (const e of leftoverAfterItem) {
+      const key = `${e.subjectId}|${e.startISO}|${e.endISO}`;
+      const bucket = byTimeKey.get(key);
+      if (bucket) bucket.push(e);
+      else byTimeKey.set(key, [e]);
+    }
+    for (const [, rows] of byTimeKey) {
+      if (rows.length < 2) continue;
+      if (!compatibleKinds(rows)) continue;
+      const sorted = [...rows].sort((a, b) => roomScore(b) - roomScore(a));
+      const canonical = sorted[0]!;
+      const redundant = sorted.slice(1);
+      autoMerges.push({
+        canonicalEventId: canonical.eventId,
+        redundantEventIds: redundant.map((r) => r.eventId),
+        reason: `same subject + same time slot (${canonical.subjectId}, ${canonical.startISO} → ${canonical.endISO}); keeping the event with the more specific room`,
+      });
+      for (const r of rows) consumed.add(r.eventId);
+    }
+
     const leftover = cluster.filter((e) => !consumed.has(e.eventId));
     if (leftover.length >= 2) remainingClusters.push(leftover);
   }
   return { autoMerges, remainingClusters };
+}
+
+/** All events have the same `kind`, OR they're a mix of "other" + a specific
+ *  kind (PDF agent sometimes emits "other" for sessions it couldn't classify;
+ *  iCal labels them precisely — those are still the same session). */
+function compatibleKinds(rows: CalendarItemRow[]): boolean {
+  const kinds = new Set(rows.map((r) => r.kind));
+  if (kinds.size === 1) return true;
+  // A lecture session that the agent labelled "other" should still merge
+  // with the iCal LEC entry. Only allow a single "real" kind alongside "other".
+  if (!kinds.has('other')) return false;
+  kinds.delete('other');
+  return kinds.size === 1;
+}
+
+/** Higher score = more specific room. Rooms with a building name + a coded
+ *  room number ("Shrum Science Centre Chemistry - C9002") beat generic
+ *  "Burnaby Campus C9002" beat null. */
+function roomScore(r: CalendarItemRow): number {
+  const room = r.room ?? '';
+  if (!room) return 0;
+  let score = room.length; // longer ≈ more specific in practice
+  if (/\s-\s/.test(room)) score += 50;       // "Building - Room" pattern
+  if (/[A-Z]{2,}\d/.test(room)) score += 25; // contains a code like SSCC9002
+  if (/Campus$/i.test(room)) score -= 30;    // generic "X Campus" demoted
+  return score;
 }
 
 /** Make sure `canonicalEventId` belongs to a subject that still exists.

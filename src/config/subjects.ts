@@ -11,6 +11,10 @@ export interface Subject {
   professor: string;
   /** Default lecture room  -  falls back when an event doesn't specify one. */
   room?: string;
+  /** SFU section the student is enrolled in, e.g. "D100". Used to pick the
+   *  right section when enriching via api.sfucourses.com — different sections
+   *  of the same course can have different instructors. */
+  section?: string;
   /** Term label, e.g. "Summer 2026". */
   term?: string;
   /**

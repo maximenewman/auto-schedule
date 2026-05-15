@@ -250,8 +250,12 @@ function SyncPill() {
 // this order as a vertical checklist so the user sees what's happening.
 const ICAL_PHASES = [
   { key: 'fetch',  label: 'Pull events from CourSys' },
+  // "Sync to Google Calendar" covers both the iCal upsert and the
+  // reconcile-push that re-creates any locally-known events Google has
+  // lost. They share the `upsert` progress row.
   { key: 'upsert', label: 'Sync to Google Calendar' },
   { key: 'dedup',  label: 'Merge duplicate subjects' },
+  { key: 'enrich', label: 'Look up instructors (sfucourses.com)' },
 ];
 
 function PhaseRow({ label, state }) {
@@ -355,7 +359,15 @@ function IcalSubscriptionButton() {
         if (evt.status === 'done')  {
           cur.status = 'done';
           cur.processed = cur.total;
-          cur.detail = `+${evt.inserted} new  -  ${evt.updated} updated  -  ${evt.unchanged} unchanged${evt.failures ? `  -  ${evt.failures} failed` : ''}`;
+          const restored = evt.restored ?? 0;
+          const parts = [
+            `+${evt.inserted} new`,
+            `${evt.updated} updated`,
+            `${evt.unchanged} unchanged`,
+          ];
+          if (restored > 0) parts.push(`${restored} restored`);
+          if (evt.failures) parts.push(`${evt.failures} failed`);
+          cur.detail = parts.join('  -  ');
         }
       } else if (evt.stage === 'dedup') {
         if (evt.status === 'analyzing') {
@@ -376,6 +388,28 @@ function IcalSubscriptionButton() {
           if (evt.subjectMerges) parts.push(`${evt.subjectMerges} subject${evt.subjectMerges === 1 ? '' : 's'}`);
           if (evt.eventMerges) parts.push(`${evt.eventMerges} event${evt.eventMerges === 1 ? '' : 's'}`);
           cur.detail = parts.length ? parts.join('  -  ') + ' merged' : 'no duplicates';
+        }
+      } else if (evt.stage === 'enrich') {
+        if (evt.status === 'start') {
+          cur.status = 'running';
+          cur.processed = 0;
+          cur.total = evt.total;
+          cur.detail = evt.total === 0 ? 'no subjects need filling' : 'querying sfucourses.com...';
+          if (evt.total === 0) cur.status = 'done';
+        }
+        if (evt.status === 'tick') {
+          cur.status = 'running';
+          cur.processed = evt.processed;
+          cur.total = evt.total;
+          cur.detail = `${evt.subjectId}${evt.filled ? ' (filled)' : ''}`;
+        }
+        if (evt.status === 'done') {
+          cur.status = 'done';
+          cur.detail = evt.filled > 0
+            ? `filled ${evt.filled}/${evt.tried} subject${evt.tried === 1 ? '' : 's'}`
+            : evt.tried === 0
+              ? 'no subjects need filling'
+              : `tried ${evt.tried}, no matches`;
         }
       } else if (evt.stage === 'error') {
         // Mark whichever stage was currently running as errored.
@@ -478,6 +512,8 @@ function IcalSubscriptionButton() {
                 {result.subjectMerges > 0 ? `  -  ${result.subjectMerges} subject${result.subjectMerges === 1 ? '' : 's'} merged` : ''}
                 {result.eventMerges > 0 ? `  -  ${result.eventMerges} event${result.eventMerges === 1 ? '' : 's'} merged` : ''}
                 {result.googleEventsDeleted > 0 ? `  -  ${result.googleEventsDeleted} stale Google events removed` : ''}
+                {result.subjectsEnriched > 0 ? `  -  ${result.subjectsEnriched} instructor${result.subjectsEnriched === 1 ? '' : 's'} filled` : ''}
+                {result.eventsRestored > 0 ? `  -  ${result.eventsRestored} event${result.eventsRestored === 1 ? '' : 's'} restored on Google` : ''}
                 .
               </div>
               {result.dedupWarning && (

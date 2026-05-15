@@ -19,6 +19,10 @@ export const SubjectSchema = z.object({
   name: z.string().min(1),
   professor: z.string().default(''),
   room: z.string().optional(),
+  section: z
+    .string()
+    .regex(/^[A-Z]\d{2,4}$/i, 'section must be a letter followed by 2–4 digits, e.g. "D100"')
+    .optional(),
   term: z.string().optional(),
   color: z
     .string()

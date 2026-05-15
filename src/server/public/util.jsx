@@ -76,9 +76,13 @@ const Util = {
     return ({
       lecture: 'Lecture',
       tutorial: 'Tutorial',
+      lab: 'Lab',
+      seminar: 'Seminar',
       'office-hours': 'Office hours',
       assignment: 'Assignment',
       midterm: 'Midterm',
+      exam: 'Exam',
+      other: 'Other',
     })[k] || k;
   },
 };
