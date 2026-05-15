@@ -217,35 +217,6 @@ function Deadlines({ now }) {
   );
 }
 
-function SyncPill() {
-  const s = window.SYNC_STATUS;
-  if (s.running) {
-    return (
-      <div className="sync-pill">
-        <span className="dot" style={{ background: '#0066cc' }}></span>
-        Syncing...
-      </div>
-    );
-  }
-  if (!s.lastRunISO) {
-    return (
-      <div className="sync-pill">
-        <span className="dot" style={{ background: '#a8a8ad' }}></span>
-        No sync yet
-      </div>
-    );
-  }
-  const t = new Date(s.lastRunISO).toLocaleTimeString('en-US', {
-    hour: 'numeric', minute: '2-digit', hour12: false,
-  });
-  return (
-    <div className="sync-pill">
-      <span className="dot"></span>
-      Synced {t}  -  {s.itemsAddedLastRun} added
-    </div>
-  );
-}
-
 // Phases the streamed POST /api/import/ical reports against. Rendered in
 // this order as a vertical checklist so the user sees what's happening.
 const ICAL_PHASES = [
@@ -660,7 +631,6 @@ function SchedulePage({ now, tweaks }) {
         title="Schedule"
         right={(
           <>
-            <SyncPill />
             <IcalSubscriptionButton />
             <ImportSfuButton />
             <button className="btn-ghost-pill" onClick={() => window.location.hash = '#/subjects'}>Subjects</button>

@@ -650,6 +650,7 @@ button { font-family: inherit; cursor: pointer; border: 0; background: none; col
   padding: 4px 10px;
 }
 .assignment-row .kind.midterm { color: #d93025; background: rgba(217,48,37,0.08); }
+.assignment-row .kind.exam { color: #d93025; background: rgba(217,48,37,0.08); }
 .assignment-row .kind.assignment { color: var(--primary); background: rgba(0,102,204,0.08); }
 .assignment-row .kind.lecture { color: var(--ink-muted-80); background: var(--parchment); }
 .assignment-row .kind.tutorial { color: var(--ink-muted-80); background: var(--parchment); }

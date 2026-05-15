@@ -15,23 +15,12 @@ function useHashRoute() {
   return { hash, route: parts[0] || 'schedule', param: parts[1] || null, setHash };
 }
 
-function lastSyncLabel(status) {
-  if (status.running) return 'Syncing...';
-  if (!status.lastRunISO) return 'No sync yet';
-  const last = new Date(status.lastRunISO);
-  const t = last.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: false });
-  const added = status.itemsAddedLastRun;
-  return `Last sync ${t}  -  ${added} added`;
-}
-
 function GlobalNav({ route }) {
   const items = [
     { id: 'schedule', label: 'Schedule', href: '#/' },
     { id: 'subjects', label: 'Subjects', href: '#/subjects' },
     { id: 'announcements', label: 'Announcements', href: '#/announcements' },
   ];
-  const s = window.SYNC_STATUS;
-  const healthy = s.googleAuthOk && s.coursysAuthOk;
   return (
     <header className="global-nav" data-screen-label="Global nav">
       <div className="brand"><span className="dot"></span>auto-schedule</div>
@@ -40,12 +29,6 @@ function GlobalNav({ route }) {
           <a key={it.id} href={it.href} className={route === it.id ? 'active' : ''}>{it.label}</a>
         ))}
       </nav>
-      <div className="status">
-        <span>
-          <span className="dot-ok" style={{ background: healthy ? '#30d158' : '#ff9f0a' }}></span>
-          {lastSyncLabel(s)}
-        </span>
-      </div>
     </header>
   );
 }
