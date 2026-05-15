@@ -71,10 +71,31 @@ export interface IcalSyncResult {
   attributed: number;
   unattributed: number;
   subjectsCreated: number;
+  /** Events skipped because the would-be auto-created subject had no
+   *  current/future lecture / tutorial / deadline anchoring it as a
+   *  real class the user is taking this term. */
+  skippedInactive: number;
   eventsInserted: number;
   eventsUpdated: number;
   eventsUnchanged: number;
   failures: number;
+}
+
+/** Event kinds that count as "the student is actively in this class".
+ *  An iCal-only mention of a course with nothing but holidays / generic
+ *  metadata won't anchor a new subject card. */
+const ACTIVE_KINDS = new Set(['lecture', 'tutorial', 'assignment', 'midterm', 'exam']);
+
+/** A course only anchors a subject card if it has at least one
+ *  lecture/tutorial/deadline that ends today or later. Past-term courses
+ *  the CourSys feed still emits (CMPT 426 from Fall 2025 etc) fail this
+ *  check and don't get created. */
+function isActiveAnchor(ev: IcalEvent, todayMs: number): boolean {
+  if (isHoliday(ev)) return false;
+  if (!ACTIVE_KINDS.has(kindFor(ev))) return false;
+  const endMs = Date.parse(ev.dtend);
+  if (Number.isNaN(endMs)) return false;
+  return endMs >= todayMs;
 }
 
 /**
@@ -93,6 +114,7 @@ export async function syncIcalSubscription(
     attributed: 0,
     unattributed: 0,
     subjectsCreated: 0,
+    skippedInactive: 0,
     eventsInserted: 0,
     eventsUpdated: 0,
     eventsUnchanged: 0,
@@ -117,6 +139,25 @@ export async function syncIcalSubscription(
     subjectCache.set(normalizeCode(s.id), s);
     if (s.code) subjectCache.set(normalizeCode(s.code), s);
   }
+
+  // First pass: which course codes have at least one lecture / tutorial /
+  // deadline that's still on the horizon? Only those will be allowed to
+  // auto-create a subject card. Subjects that already exist locally (PDF
+  // bootstrap, manual entry, prior sync) are not subject to this gate —
+  // we keep upserting their events regardless of activity.
+  const todayMs = Date.parse(
+    new Date().toISOString().slice(0, 10) + 'T00:00:00Z',
+  );
+  const activeCodes = new Set<string>();
+  for (const ev of events) {
+    if (!isActiveAnchor(ev, todayMs)) continue;
+    const code = pickCourseCode(ev);
+    if (code) activeCodes.add(normalizeCode(code));
+  }
+  logger.info(
+    { activeCodes: [...activeCodes] },
+    'ical: active course codes for this sync',
+  );
 
   let processed = 0;
   // Emit a tick every ~5 events or on the last one. With ~200 VEVENTs and
@@ -148,6 +189,15 @@ export async function syncIcalSubscription(
       displayCode = code;
       subject = subjectCache.get(normalizeCode(code));
       if (!subject) {
+        // Gate auto-creation on the activity check. CourSys returns
+        // every course the student has ever touched (CMPT 426 from Fall
+        // 2025 etc); we only want subject cards for classes they're in
+        // *now*, defined as: has at least one lecture/tutorial/deadline
+        // ending today or later.
+        if (!activeCodes.has(normalizeCode(code))) {
+          result.skippedInactive++;
+          continue;
+        }
         subject = await autoCreateSubject(opts.store, code, baseFolder, opts.userId);
         subjectCache.set(normalizeCode(subject.id), subject);
         subjectCache.set(normalizeCode(code), subject);
