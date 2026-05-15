@@ -1,9 +1,8 @@
-import { existsSync, readdirSync, statSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
+import type { Store } from '../state/store.js';
 
 const AGENT_ERROR_DIR = resolve('logs/agent-errors');
-const GOOGLE_TOKEN_PATH = resolve('data/auth/google.json');
-const COURSYS_COOKIE_PATH = resolve('data/auth/coursys.json');
 
 export interface SyncStatus {
   lastRunISO: string | null;
@@ -33,27 +32,26 @@ export function countRecentAgentErrors(now: Date = new Date()): number {
   return n;
 }
 
-export function googleAuthExists(): boolean {
-  return existsSync(GOOGLE_TOKEN_PATH);
+export async function googleAuthExists(store: Store, userId: number): Promise<boolean> {
+  const tokens = await store.getGoogleTokens(userId);
+  return !!tokens?.refreshToken;
 }
 
 /**
  * CourSys cookies don't carry a hard expiry we can trust (some are session
- * cookies). Use file mtime as a proxy and assume the SFU CAS session lasts
- * roughly 7 days from the last successful login.
+ * cookies). Use the upload timestamp as a proxy and assume the SFU CAS
+ * session lasts roughly 7 days from the last refresh.
  */
-export function coursysCookieAge(): { ok: boolean; expiresInDays: number | null } {
-  if (!existsSync(COURSYS_COOKIE_PATH)) return { ok: false, expiresInDays: null };
-  try {
-    const raw = JSON.parse(readFileSync(COURSYS_COOKIE_PATH, 'utf8')) as {
-      saved_at?: string;
-    };
-    if (!raw.saved_at) return { ok: true, expiresInDays: null };
-    const savedAt = new Date(raw.saved_at).getTime();
-    const ageDays = (Date.now() - savedAt) / (24 * 60 * 60 * 1000);
-    const remaining = Math.max(0, Math.round(7 - ageDays));
-    return { ok: remaining > 0, expiresInDays: remaining };
-  } catch {
+export async function coursysCookieAge(
+  store: Store,
+  userId: number,
+): Promise<{ ok: boolean; expiresInDays: number | null }> {
+  const row = await store.getCourSysCookies(userId);
+  if (!row || row.cookies.length === 0) {
     return { ok: false, expiresInDays: null };
   }
+  if (!row.updatedAt) return { ok: true, expiresInDays: null };
+  const ageDays = (Date.now() - row.updatedAt.getTime()) / (24 * 60 * 60 * 1000);
+  const remaining = Math.max(0, Math.round(7 - ageDays));
+  return { ok: remaining > 0, expiresInDays: remaining };
 }

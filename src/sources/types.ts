@@ -20,5 +20,5 @@ export interface SourceItem {
 export interface SourceFetcher {
   fetchNew(subject: Subject, source: Source): Promise<SourceItem[]>;
   /** Called after the pipeline finished processing an item successfully. */
-  markProcessed(subject: Subject, source: Source, item: SourceItem): void;
+  markProcessed(subject: Subject, source: Source, item: SourceItem): Promise<void> | void;
 }

@@ -2,32 +2,31 @@ import 'dotenv/config';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { logger } from './logger.js';
-import { StateStore } from './state/store.js';
+import { DEFAULT_USER_ID, Store } from './state/store.js';
 import { loadSubjects } from './config/subjectsStore.js';
-import { runGoogleSetup, getAuthorizedClient } from './auth/google.js';
-import { runCourSysSetup, CourSysAuthError } from './auth/coursys.js';
+import { getAuthorizedClient } from './auth/google.js';
+import { CourSysAuthError } from './auth/coursys.js';
 import { upsertEvent } from './sync/calendar.js';
 import { runPipeline } from './pipeline.js';
 import { notifyAuthFailure } from './notify/notifier.js';
 import { parseSchedulePdf } from './import/sfuPdf.js';
 import { bootstrapFromSchedule } from './import/bootstrap.js';
 import { runFullIcalSync, ICAL_URL_SETTING } from './import/icalSync.js';
+import { sendDailyDigest } from './bot/daily.js';
 
 type Command =
   | 'run'
-  | 'setup:google'
-  | 'setup:coursys'
   | 'test:calendar'
   | 'import:sfu'
-  | 'sync:ical';
+  | 'sync:ical'
+  | 'notify:daily';
 
 const COMMANDS: readonly Command[] = [
   'run',
-  'setup:google',
-  'setup:coursys',
   'test:calendar',
   'import:sfu',
   'sync:ical',
+  'notify:daily',
 ];
 
 function parseCommand(argv: string[]): Command {
@@ -84,25 +83,30 @@ async function maybeJitter(command: Command): Promise<void> {
   await new Promise((r) => setTimeout(r, ms));
 }
 
+function pickUserId(): number {
+  const raw = process.env.AUTO_SCHEDULE_USER_ID;
+  if (!raw) return DEFAULT_USER_ID;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new Error(`AUTO_SCHEDULE_USER_ID must be a positive integer, got "${raw}"`);
+  }
+  return n;
+}
+
 async function main(): Promise<void> {
   const command = parseCommand(process.argv);
   await maybeJitter(command);
-  // import:sfu parses its own args and needs to read subjects via the store  - 
-  // loading them here would be redundant but it's also the cheapest sanity
-  // check that the store boots.
-  const subjects = loadSubjects();
-  logger.info(
-    { command, subjectCount: subjects.length, pid: process.pid },
-    'auto-schedule starting',
-  );
+  const userId = pickUserId();
+  logger.info({ command, userId, pid: process.pid }, 'auto-schedule starting');
 
   switch (command) {
     case 'run': {
-      const store = new StateStore();
+      const store = await Store.create();
       try {
-        const googleAuth = await getAuthorizedClient();
+        const subjects = await loadSubjects(store, userId);
+        const googleAuth = await getAuthorizedClient(store, userId);
         try {
-          await runPipeline(subjects, { googleAuth, store });
+          await runPipeline(subjects, { googleAuth, store, userId });
         } catch (err) {
           if (err instanceof CourSysAuthError) {
             await notifyAuthFailure('coursys', googleAuth, err.message);
@@ -112,32 +116,24 @@ async function main(): Promise<void> {
           throw err;
         }
       } finally {
-        store.close();
+        await store.close();
       }
       return;
     }
-    case 'setup:google': {
-      await runGoogleSetup();
-      return;
-    }
-    case 'setup:coursys': {
-      await runCourSysSetup();
-      return;
-    }
     case 'sync:ical': {
-      const store = new StateStore();
+      const store = await Store.create();
       try {
-        const url = process.argv[3] ?? store.getSetting(ICAL_URL_SETTING);
+        const url = process.argv[3] ?? (await store.getSetting(ICAL_URL_SETTING, userId));
         if (!url) {
           throw new Error(
             'no iCal URL configured. Pass as arg or save via the UI (Schedule -> iCal subscription).',
           );
         }
-        const googleAuth = await getAuthorizedClient();
-        const result = await runFullIcalSync(url, { googleAuth, store });
+        const googleAuth = await getAuthorizedClient(store, userId);
+        const result = await runFullIcalSync(url, { googleAuth, store, userId });
         logger.info(result, 'sync:ical finished');
       } finally {
-        store.close();
+        await store.close();
       }
       return;
     }
@@ -154,25 +150,36 @@ async function main(): Promise<void> {
         },
         'parsed SFU schedule',
       );
-      const store = new StateStore();
+      const store = await Store.create();
       try {
-        const googleAuth = await getAuthorizedClient();
+        const googleAuth = await getAuthorizedClient(store, userId);
         const result = await bootstrapFromSchedule(schedule, {
           baseFolder: args.baseFolder,
           googleAuth,
           store,
+          userId,
           sourceLabel: `pdf:${args.pdfPath.split(/[\\/]/).pop()}`,
         });
         logger.info(result, 'import:sfu finished');
       } finally {
-        store.close();
+        await store.close();
+      }
+      return;
+    }
+    case 'notify:daily': {
+      const store = await Store.create();
+      try {
+        const result = await sendDailyDigest(store, userId);
+        logger.info(result, 'notify:daily finished');
+      } finally {
+        await store.close();
       }
       return;
     }
     case 'test:calendar': {
-      const store = new StateStore();
+      const store = await Store.create();
       try {
-        const auth = await getAuthorizedClient();
+        const auth = await getAuthorizedClient(store, userId);
         const now = new Date();
         const start = new Date(now.getTime() + 60 * 60 * 1000);
         const end = new Date(start.getTime() + 30 * 60 * 1000);
@@ -191,10 +198,12 @@ async function main(): Promise<void> {
             attachments: [],
           },
           store,
+          undefined,
+          userId,
         );
         logger.info({ result }, 'test:calendar finished');
       } finally {
-        store.close();
+        await store.close();
       }
       return;
     }

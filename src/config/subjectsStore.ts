@@ -1,16 +1,12 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
 import { z } from 'zod';
 import { logger } from '../logger.js';
 import {
   SUBJECT_PALETTE,
   colorForSubject,
-  subjects as SEED_SUBJECTS,
   type Source,
   type Subject,
 } from './subjects.js';
-
-const STORE_PATH = resolve('data/subjects.json');
+import { DEFAULT_USER_ID, type Store } from '../state/store.js';
 
 const SourceSchema = z.union([
   z.object({ type: z.literal('email'), label: z.string().min(1) }),
@@ -23,6 +19,10 @@ export const SubjectSchema = z.object({
   name: z.string().min(1),
   professor: z.string().default(''),
   room: z.string().optional(),
+  section: z
+    .string()
+    .regex(/^[A-Z]\d{2,4}$/i, 'section must be a letter followed by 2–4 digits, e.g. "D100"')
+    .optional(),
   term: z.string().optional(),
   color: z
     .string()
@@ -32,80 +32,59 @@ export const SubjectSchema = z.object({
   sources: z.array(SourceSchema).default([]),
 });
 
-const SubjectsFileSchema = z.object({
-  subjects: z.array(SubjectSchema),
-});
-
-let cache: Subject[] | null = null;
-
-/** Read subjects from disk, seeding the file from the compiled-in defaults
- *  on first call so existing setups keep working without manual migration. */
-export function loadSubjects(): Subject[] {
-  if (cache) return cache;
-  if (!existsSync(STORE_PATH)) {
-    // Seed on first boot from the compiled-in defaults so existing installs
-    // don't need a manual migration step.
-    writeSubjectsFile(SEED_SUBJECTS);
-    cache = SEED_SUBJECTS;
-    return cache;
-  }
-  const raw = readFileSync(STORE_PATH, 'utf8');
-  const parsed = SubjectsFileSchema.parse(JSON.parse(raw));
-  cache = parsed.subjects;
-  return cache;
+export async function loadSubjects(
+  store: Store,
+  userId: number = DEFAULT_USER_ID,
+): Promise<Subject[]> {
+  return store.listSubjects(userId);
 }
 
-export function saveSubjects(next: Subject[]): void {
-  writeSubjectsFile(next);
-  cache = next;
+export async function findSubject(
+  store: Store,
+  id: string,
+  userId: number = DEFAULT_USER_ID,
+): Promise<Subject | undefined> {
+  return store.getSubject(id, userId);
 }
 
-export function findSubject(id: string): Subject | undefined {
-  return loadSubjects().find((s) => s.id === id);
-}
-
-export function createSubject(input: unknown): Subject {
+export async function createSubject(
+  store: Store,
+  input: unknown,
+  userId: number = DEFAULT_USER_ID,
+): Promise<Subject> {
   const subject = SubjectSchema.parse(input);
-  const current = loadSubjects();
-  if (current.some((s) => s.id === subject.id)) {
+  const result = await store.insertSubject(subject, userId);
+  if (!result.ok) {
     throw new ConflictError(`subject "${subject.id}" already exists`);
   }
-  saveSubjects([...current, subject]);
-  logger.info({ id: subject.id }, 'subject created');
+  logger.info({ id: subject.id, userId }, 'subject created');
   return subject;
 }
 
-export function updateSubject(id: string, input: unknown): Subject {
+export async function updateSubject(
+  store: Store,
+  id: string,
+  input: unknown,
+  userId: number = DEFAULT_USER_ID,
+): Promise<Subject> {
   const incoming = SubjectSchema.parse(input);
   if (incoming.id !== id) {
     throw new ValidationError(`body id "${incoming.id}" does not match path id "${id}"`);
   }
-  const current = loadSubjects();
-  const idx = current.findIndex((s) => s.id === id);
-  if (idx === -1) throw new NotFoundError(`subject "${id}" not found`);
-  const next = [...current];
-  next[idx] = incoming;
-  saveSubjects(next);
-  logger.info({ id }, 'subject updated');
+  const ok = await store.replaceSubject(incoming, userId);
+  if (!ok) throw new NotFoundError(`subject "${id}" not found`);
+  logger.info({ id, userId }, 'subject updated');
   return incoming;
 }
 
-export function deleteSubject(id: string): void {
-  const current = loadSubjects();
-  const idx = current.findIndex((s) => s.id === id);
-  if (idx === -1) throw new NotFoundError(`subject "${id}" not found`);
-  const next = current.filter((_, i) => i !== idx);
-  saveSubjects(next);
-  logger.info({ id }, 'subject deleted');
-}
-
-function writeSubjectsFile(subjects: Subject[]): void {
-  mkdirSync(dirname(STORE_PATH), { recursive: true });
-  writeFileSync(
-    STORE_PATH,
-    JSON.stringify({ subjects }, null, 2) + '\n',
-    'utf8',
-  );
+export async function deleteSubject(
+  store: Store,
+  id: string,
+  userId: number = DEFAULT_USER_ID,
+): Promise<void> {
+  const ok = await store.removeSubject(id, userId);
+  if (!ok) throw new NotFoundError(`subject "${id}" not found`);
+  logger.info({ id, userId }, 'subject deleted');
 }
 
 export class NotFoundError extends Error {

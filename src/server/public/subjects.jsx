@@ -34,6 +34,7 @@ function emptySubject() {
     name: '',
     professor: '',
     room: '',
+    section: '',
     term: '',
     color: COLOR_OPTIONS[0],
     destinationFolder: '',
@@ -58,6 +59,9 @@ function normalizeSubjectForApi(s) {
   };
   if (s.code && s.code.trim()) out.code = s.code.trim();
   if (s.room && s.room.trim()) out.room = s.room.trim();
+  if (s.section && /^[A-Z]\d{2,4}$/i.test(s.section.trim())) {
+    out.section = s.section.trim().toUpperCase();
+  }
   if (s.term && s.term.trim()) out.term = s.term.trim();
   if (s.color && /^#[0-9a-fA-F]{6}$/.test(s.color)) out.color = s.color;
   return out;
@@ -169,6 +173,16 @@ function SubjectForm({ initial, mode, onCancel, onSaved }) {
                 value={form.room}
                 onChange={(e) => update({ room: e.target.value })}
                 placeholder="AQ 3149"
+              />
+            </label>
+            <label>
+              <span>Section</span>
+              <input
+                type="text"
+                value={form.section || ''}
+                onChange={(e) => update({ section: e.target.value })}
+                placeholder="D100"
+                pattern="[A-Za-z]\d{2,4}"
               />
             </label>
             <label>
@@ -462,7 +476,10 @@ function SubjectsPage({ now }) {
                 <div className="accent" style={{ background: s.color }}></div>
                 <div className="code">{s.code || s.id}</div>
                 <div className="name">{s.name}</div>
-                <div className="prof">{s.professor}{s.room ? `  -  ${s.room}` : ''}</div>
+                <div className="prof">
+                  {s.section ? `${s.section} · ` : ''}
+                  {s.professor}{s.room ? `  -  ${s.room}` : ''}
+                </div>
                 {next ? (
                   <div style={{ marginTop: 14, fontSize: 13, color: 'var(--ink-muted-80)' }}>
                     <span style={{ color: 'var(--ink-muted-48)' }}>Next  -  </span>
@@ -546,12 +563,25 @@ function SubjectDetail({ id, now }) {
 
   const handleDelete = useCallback(async () => {
     if (!s) return;
-    if (!window.confirm(`Delete ${s.code || s.id}? Pipeline state and downloaded files stay on disk, but the subject won't be synced anymore.`)) return;
+    if (!window.confirm(
+      `Delete ${s.code || s.id}?\n\n`
+      + `This will also delete every Google Calendar event tied to this `
+      + `subject. Downloaded files on disk are left alone.`
+    )) return;
     const res = await fetch(`/api/subjects/${encodeURIComponent(s.id)}`, { method: 'DELETE' });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       alert(`Delete failed: ${body.error || `HTTP ${res.status}`}`);
       return;
+    }
+    // The cascade endpoint returns a 200 with a summary of what it cleaned
+    // up. Surface that so users see why a sync took a few seconds.
+    const body = await res.json().catch(() => null);
+    if (body && body.googleEventsDeleted > 0) {
+      console.log(
+        `deleted subject ${body.subjectId}: ${body.googleEventsDeleted} Google event(s) removed, `
+        + `${body.localItemsDeleted} local row(s) cleaned`,
+      );
     }
     await window.bootData();
     window.location.hash = '#/subjects';
@@ -588,7 +618,7 @@ function SubjectDetail({ id, now }) {
       <div className="subject-detail">
         <div className="sd-head">
           <div>
-            <div className="code-tag"><span className="swatch" style={{ background: s.color }}></span>{s.code || s.id}{s.term ? `  -  ${s.term}` : ''}</div>
+            <div className="code-tag"><span className="swatch" style={{ background: s.color }}></span>{s.code || s.id}{s.section ? ` ${s.section}` : ''}{s.term ? `  -  ${s.term}` : ''}</div>
             <h1>{s.name}</h1>
             <div className="prof">{s.professor}</div>
             <div style={{ marginTop: 12, display: 'flex', gap: 18, color: 'var(--ink-muted-80)', fontSize: 14, flexWrap: 'wrap' }}>

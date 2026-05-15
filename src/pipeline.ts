@@ -4,7 +4,6 @@ import type { StateStore } from './state/store.js';
 import { FetcherRegistry } from './sources/factory.js';
 import { extractEvents } from './agent/extractor.js';
 import { upsertEvent } from './sync/calendar.js';
-import { downloadAttachment } from './sync/files.js';
 import { logger } from './logger.js';
 import { CourSysAuthError } from './auth/coursys.js';
 import { runFullIcalSync, ICAL_URL_SETTING } from './import/icalSync.js';
@@ -12,6 +11,7 @@ import { runFullIcalSync, ICAL_URL_SETTING } from './import/icalSync.js';
 export interface RunContext {
   googleAuth: OAuth2Client;
   store: StateStore;
+  userId?: number;
 }
 
 export interface RunSummary {
@@ -38,12 +38,13 @@ export async function runPipeline(
   // iCal subscription is the default ingestion path  -  if a global CourSys
   // iCal URL is saved, sync it first so any auto-created subjects exist
   // before the per-subject email/site loop runs.
-  const icalUrl = ctx.store.getSetting(ICAL_URL_SETTING);
+  const icalUrl = await ctx.store.getSetting(ICAL_URL_SETTING, ctx.userId);
   if (icalUrl) {
     try {
       const r = await runFullIcalSync(icalUrl, {
         googleAuth: ctx.googleAuth,
         store: ctx.store,
+        userId: ctx.userId,
       });
       summary.eventsUpserted += r.eventsInserted + r.eventsUpdated;
       summary.itemsProcessed += r.fetched;
@@ -126,6 +127,7 @@ async function processSource(
     );
     const extracted = await extractEvents(subject, source, item.content, {
       store: ctx.store,
+      userId: ctx.userId,
     });
     if (!extracted) {
       log.warn('      x agent returned no object; skipping item (raw output logged)');
@@ -141,31 +143,21 @@ async function processSource(
           event,
           ctx.store,
           describeSource(source),
+          ctx.userId,
         );
         upserted++;
       } catch (err) {
         log.error({ err, itemId: event.itemId }, 'calendar upsert failed');
       }
-
-      for (const attachment of event.attachments) {
-        await downloadAttachment(attachment, subject.destinationFolder, {
-          googleAuth: ctx.googleAuth,
-          store: ctx.store,
-        });
-      }
     }
 
-    // Source-level attachments (e.g. files referenced in an email or page but
-    // not pulled into a specific event)  -  best-effort download too.
-    for (const attachment of item.attachments) {
-      await downloadAttachment(attachment, subject.destinationFolder, {
-        googleAuth: ctx.googleAuth,
-        store: ctx.store,
-      });
-    }
+    // Attachments used to be downloaded to subject.destinationFolder here.
+    // Phase D removed that path; attachment URLs travel with the calendar
+    // event (in the description) so the user can click through from Google
+    // Calendar instead.
 
     // Mark processed AFTER calendar upserts so a failure mid-loop re-runs cleanly.
-    fetcher.markProcessed(subject, source, item);
+    await fetcher.markProcessed(subject, source, item);
   }
 
   return { items: items.length, upserted };

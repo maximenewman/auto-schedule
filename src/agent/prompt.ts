@@ -24,14 +24,17 @@ Hard rules:
    The attachments array is REQUIRED on every event  -  emit [] when there are
    no attachments rather than omitting the field.
 7. Classify each event's "kind" into exactly one of:
-     - "lecture"       -  recurring scheduled class meeting
-     - "tutorial"      -  recurring discussion / lab session
+     - "lecture"       -  recurring scheduled class meeting (LEC)
+     - "tutorial"      -  recurring discussion session (TUT)
+     - "lab"           -  recurring lab session (LAB)
+     - "seminar"       -  recurring seminar session (SEM)
      - "office-hours"  -  instructor or TA office hours
-     - "assignment"    -  a homework / lab / project deadline
+     - "assignment"    -  a homework / lab assignment / project deadline
      - "midterm"       -  a midterm exam
-     - "exam"          -  a final exam or other major exam
+     - "exam"          -  a final exam, major exam, or graded quiz (quizzes ARE exam)
      - "other"         -  anything actionable that doesn't fit the above
-   Use the most specific kind that applies.
+   Use the most specific kind that applies. SFU section codes map directly:
+   LEC→lecture, TUT→tutorial, LAB→lab, SEM→seminar.
 8. "room" is the physical or virtual location. Set it to the room number
    (e.g. "AQ 3149") if the source states one, "CourSys" / "Crowdmark" /
    "Canvas" for online submissions, or null when the source says nothing.

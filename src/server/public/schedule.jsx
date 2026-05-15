@@ -1,5 +1,5 @@
 /* global React, Util */
-const { useState, useEffect, useMemo, useCallback } = React;
+const { useState, useEffect, useMemo } = React;
 
 const HOUR_START = 8;
 const HOUR_END = 22;
@@ -48,20 +48,42 @@ function WeekGrid({ weekStart, now, onEventClick }) {
               const subj = Util.subjectById(e.subjectId);
               if (!subj) return null;
               const isInstant = e.start.getTime() === e.end.getTime();
+              const sameDay = Util.sameDay(e.start, e.end);
               const startH = Util.hoursDecimal(e.start);
-              const endH = isInstant ? startH + 0.6 : Util.hoursDecimal(e.end);
-              if (endH < HOUR_START || startH > HOUR_END) return null;
-              const top = (Math.max(startH, HOUR_START) - HOUR_START) * HOUR_PX;
-              const height = (Math.min(endH, HOUR_END) - Math.max(startH, HOUR_START)) * HOUR_PX - 2;
+              // Holidays come from CourSys with `DTSTART;VALUE=DATE` and
+              // no DTEND, so our parser stores start === end at midnight.
+              // Treat any event anchored at midnight that's either instant
+              // or crosses a day boundary as a full-day banner.
+              const isAllDay = startH === 0 && (isInstant || !sameDay);
+              // Events that end on a later day (multi-day events) get
+              // their endH clamped to 24 instead of `getHours() === 0` of
+              // midnight-next-day, otherwise the filter below silently
+              // drops them.
+              let endH;
+              if (isAllDay) endH = HOUR_END; // banner — drawn separately
+              else if (isInstant) endH = startH + 0.6;
+              else if (!sameDay) endH = 24;
+              else endH = Util.hoursDecimal(e.end);
+              if (!isAllDay && (endH < HOUR_START || startH > HOUR_END)) return null;
+              // All-day events render as a thin banner pinned to the top of
+              // the day column instead of a full-column block.
+              const top = isAllDay
+                ? 0
+                : (Math.max(startH, HOUR_START) - HOUR_START) * HOUR_PX;
+              const height = isAllDay
+                ? 22
+                : (Math.min(endH, HOUR_END) - Math.max(startH, HOUR_START)) * HOUR_PX - 2;
               return (
                 <div key={e.itemId + e.start.toISOString()}
-                  className={"event kind-" + e.kind}
+                  className={"event kind-" + e.kind + (isAllDay ? " event-allday" : "")}
                   style={{ top, height, borderLeftColor: subj.color }}
                   onClick={() => onEventClick && onEventClick(e)}
-                  title={`${subj.code}  -  ${e.summary}  -  ${Util.fmtTime(e.start)}`}>
-                  <div className="ev-time">{isInstant ? `Due ${Util.fmtTime(e.start)}` : `${Util.fmtTime(e.start)}`}</div>
+                  title={`${subj.code}  -  ${e.summary}  -  ${isAllDay ? 'All day' : Util.fmtTime(e.start)}`}>
+                  {!isAllDay && (
+                    <div className="ev-time">{isInstant ? `Due ${Util.fmtTime(e.start)}` : `${Util.fmtTime(e.start)}`}</div>
+                  )}
                   <div className="ev-title">{subj.code}  -  {e.summary.replace(/^(Lecture|Tutorial|Office hours)  -  /, '')}</div>
-                  {e.room && height > 50 && <div className="ev-room">{e.room}</div>}
+                  {!isAllDay && e.room && height > 50 && <div className="ev-room">{e.room}</div>}
                 </div>
               );
             })}
@@ -228,8 +250,12 @@ function SyncPill() {
 // this order as a vertical checklist so the user sees what's happening.
 const ICAL_PHASES = [
   { key: 'fetch',  label: 'Pull events from CourSys' },
+  // "Sync to Google Calendar" covers both the iCal upsert and the
+  // reconcile-push that re-creates any locally-known events Google has
+  // lost. They share the `upsert` progress row.
   { key: 'upsert', label: 'Sync to Google Calendar' },
   { key: 'dedup',  label: 'Merge duplicate subjects' },
+  { key: 'enrich', label: 'Look up instructors (sfucourses.com)' },
 ];
 
 function PhaseRow({ label, state }) {
@@ -333,7 +359,13 @@ function IcalSubscriptionButton() {
         if (evt.status === 'done')  {
           cur.status = 'done';
           cur.processed = cur.total;
-          cur.detail = `+${evt.inserted} new  -  ${evt.updated} updated  -  ${evt.unchanged} unchanged${evt.failures ? `  -  ${evt.failures} failed` : ''}`;
+          const parts = [
+            `+${evt.inserted} new`,
+            `${evt.updated} updated`,
+            `${evt.unchanged} unchanged`,
+          ];
+          if (evt.failures) parts.push(`${evt.failures} failed`);
+          cur.detail = parts.join('  -  ');
         }
       } else if (evt.stage === 'dedup') {
         if (evt.status === 'analyzing') {
@@ -354,6 +386,28 @@ function IcalSubscriptionButton() {
           if (evt.subjectMerges) parts.push(`${evt.subjectMerges} subject${evt.subjectMerges === 1 ? '' : 's'}`);
           if (evt.eventMerges) parts.push(`${evt.eventMerges} event${evt.eventMerges === 1 ? '' : 's'}`);
           cur.detail = parts.length ? parts.join('  -  ') + ' merged' : 'no duplicates';
+        }
+      } else if (evt.stage === 'enrich') {
+        if (evt.status === 'start') {
+          cur.status = 'running';
+          cur.processed = 0;
+          cur.total = evt.total;
+          cur.detail = evt.total === 0 ? 'no subjects need filling' : 'querying sfucourses.com...';
+          if (evt.total === 0) cur.status = 'done';
+        }
+        if (evt.status === 'tick') {
+          cur.status = 'running';
+          cur.processed = evt.processed;
+          cur.total = evt.total;
+          cur.detail = `${evt.subjectId}${evt.filled ? ' (filled)' : ''}`;
+        }
+        if (evt.status === 'done') {
+          cur.status = 'done';
+          cur.detail = evt.filled > 0
+            ? `filled ${evt.filled}/${evt.tried} subject${evt.tried === 1 ? '' : 's'}`
+            : evt.tried === 0
+              ? 'no subjects need filling'
+              : `tried ${evt.tried}, no matches`;
         }
       } else if (evt.stage === 'error') {
         // Mark whichever stage was currently running as errored.
@@ -456,6 +510,7 @@ function IcalSubscriptionButton() {
                 {result.subjectMerges > 0 ? `  -  ${result.subjectMerges} subject${result.subjectMerges === 1 ? '' : 's'} merged` : ''}
                 {result.eventMerges > 0 ? `  -  ${result.eventMerges} event${result.eventMerges === 1 ? '' : 's'} merged` : ''}
                 {result.googleEventsDeleted > 0 ? `  -  ${result.googleEventsDeleted} stale Google events removed` : ''}
+                {result.subjectsEnriched > 0 ? `  -  ${result.subjectsEnriched} instructor${result.subjectsEnriched === 1 ? '' : 's'} filled` : ''}
                 .
               </div>
               {result.dedupWarning && (
@@ -593,43 +648,11 @@ function ImportSfuButton() {
   );
 }
 
-function SchedulePage({ now, tweaks, onSyncDone }) {
+function SchedulePage({ now, tweaks }) {
   const [weekStart, setWeekStart] = useState(() => Util.startOfWeek(now));
-  const [syncing, setSyncing] = useState(false);
   const weekEnd = Util.addDays(weekStart, 6);
 
   const heroVariant = tweaks.hero || 'hero';
-
-  const handleSync = useCallback(async () => {
-    if (syncing) return;
-    setSyncing(true);
-    try {
-      const res = await window.api.sync();
-      if (!res.started) {
-        console.warn('sync rejected', res);
-        return;
-      }
-      // Poll status until the run finishes. The 30s status poller in app.jsx
-      // will pick the new data up too, but a tighter poll here gives the user
-      // immediate feedback on a manually-triggered run.
-      const targetRunId = res.runId;
-      const start = Date.now();
-      while (Date.now() - start < 5 * 60 * 1000) {
-        await new Promise((r) => setTimeout(r, 1500));
-        const status = await window.api.status();
-        window.SYNC_STATUS = status;
-        if (status.lastRun && status.lastRun.runId === targetRunId) {
-          await window.refreshData();
-          break;
-        }
-      }
-    } catch (err) {
-      console.error('sync failed', err);
-    } finally {
-      setSyncing(false);
-      if (onSyncDone) onSyncDone();
-    }
-  }, [syncing, onSyncDone]);
 
   return (
     <div data-screen-label="Schedule">
@@ -641,12 +664,6 @@ function SchedulePage({ now, tweaks, onSyncDone }) {
             <IcalSubscriptionButton />
             <ImportSfuButton />
             <button className="btn-ghost-pill" onClick={() => window.location.hash = '#/subjects'}>Subjects</button>
-            <button
-              className="btn-primary"
-              onClick={handleSync}
-              disabled={syncing || window.SYNC_STATUS.running}>
-              {syncing || window.SYNC_STATUS.running ? 'Syncing...' : 'Sync now'}
-            </button>
           </>
         )}
       />

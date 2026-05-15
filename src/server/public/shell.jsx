@@ -28,6 +28,7 @@ function GlobalNav({ route }) {
   const items = [
     { id: 'schedule', label: 'Schedule', href: '#/' },
     { id: 'subjects', label: 'Subjects', href: '#/subjects' },
+    { id: 'announcements', label: 'Announcements', href: '#/announcements' },
   ];
   const s = window.SYNC_STATUS;
   const healthy = s.googleAuthOk && s.coursysAuthOk;

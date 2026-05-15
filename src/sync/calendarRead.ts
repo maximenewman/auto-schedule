@@ -2,6 +2,8 @@ import { google, type calendar_v3 } from 'googleapis';
 import type { OAuth2Client } from 'google-auth-library';
 import type { CalendarItemRow } from '../state/store.js';
 import type { StateStore } from '../state/store.js';
+import { loadSubjects } from '../config/subjectsStore.js';
+import type { Subject } from '../config/subjects.js';
 import { logger } from '../logger.js';
 
 const CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID ?? 'primary';
@@ -10,6 +12,7 @@ export interface ListEventsOptions {
   fromISO?: string;
   toISO?: string;
   subjectId?: string;
+  userId?: number;
 }
 
 /**
@@ -52,43 +55,108 @@ export async function listGoogleEvents(
 
   // Build a lookup: every locally-known event id (master event id for
   // recurrences) -> metadata we need to attach.
-  const localRows = store.listCalendarItems(
+  const localRows = await store.listCalendarItems(
     opts.subjectId ? { subjectId: opts.subjectId } : {},
+    opts.userId,
   );
   const localById = new Map<string, CalendarItemRow>();
   for (const r of localRows) localById.set(r.eventId, r);
 
+  // Fallback attribution: when an event on Google has no local row (typical
+  // after a dedup/merge that wiped the local cache, or for events created
+  // before this user existed), try to recover the subject from the summary
+  // by matching a course code against our subject list. Without this, the
+  // events silently disappear from the UI.
+  const allSubjects = await loadSubjects(store, opts.userId);
+  const subjectsByNormCode = new Map<string, Subject>();
+  for (const s of allSubjects) {
+    subjectsByNormCode.set(normCode(s.id), s);
+    if (s.code) subjectsByNormCode.set(normCode(s.code), s);
+  }
+
   const out: CalendarItemRow[] = [];
+  let viaLocal = 0;
+  let viaSummary = 0;
+  let unattributed = 0;
+  const unattributedSample: string[] = [];
   for (const ev of items) {
     if (!ev.id) continue;
-    // For recurring instances Google emits `<masterId>_<occurrenceTimestamp>`
-    // and exposes `recurringEventId` pointing at the master. Either one
-    // should match a row we wrote when bootstrapping / syncing.
-    const masterKey = ev.recurringEventId ?? ev.id;
-    const local = localById.get(masterKey);
-    if (!local) continue;
-    if (opts.subjectId && local.subjectId !== opts.subjectId) continue;
-
     const startISO = ev.start?.dateTime ?? ev.start?.date ?? null;
     const endISO = ev.end?.dateTime ?? ev.end?.date ?? startISO;
     if (!startISO || !endISO) continue;
 
+    // For recurring instances Google emits `<masterId>_<occurrenceTimestamp>`
+    // and exposes `recurringEventId` pointing at the master. The local row
+    // may have been written under EITHER form depending on its history:
+    //   - PDF bootstrap → recordLocal under the master id
+    //   - iCal sync after a dedup redirect → recordLocal under whatever the
+    //     redirect target was, which is often a per-occurrence id like
+    //     `master_20260603T203000Z`
+    // Try the occurrence id first, fall back to the master id. Without
+    // this most events end up "unattributed via local" and disappear
+    // from the dashboard.
+    const masterKey = ev.recurringEventId ?? ev.id;
+    const local = (ev.id ? localById.get(ev.id) : undefined) ?? localById.get(masterKey);
+
+    let subjectId: string;
+    let itemId: string;
+    let kind: CalendarItemRow['kind'];
+    let attachments: CalendarItemRow['attachments'] = [];
+    let sourceLabel: string | null = null;
+    let lastSyncedAt = '';
+    let cachedSummary = '';
+    let cachedDescription = '';
+    let cachedRoom: string | null = null;
+
+    if (local) {
+      subjectId = local.subjectId;
+      itemId = local.itemId;
+      kind = local.kind;
+      attachments = local.attachments;
+      sourceLabel = local.sourceLabel;
+      lastSyncedAt = local.lastSyncedAt;
+      cachedSummary = local.summary;
+      cachedDescription = local.description;
+      cachedRoom = local.room;
+      viaLocal++;
+    } else {
+      const guessed = guessSubjectFromSummary(ev.summary, subjectsByNormCode);
+      if (!guessed) {
+        unattributed++;
+        if (unattributedSample.length < 3) {
+          unattributedSample.push(
+            `${ev.id} | ${ev.summary ?? '(no summary)'} | ${startISO}`,
+          );
+        }
+        continue;
+      }
+      subjectId = guessed.id;
+      itemId = ev.id;
+      kind = 'other';
+      sourceLabel = 'google';
+      lastSyncedAt = new Date().toISOString();
+      viaSummary++;
+    }
+
+    if (opts.subjectId && subjectId !== opts.subjectId) continue;
+
     out.push({
       eventId: ev.id,
-      subjectId: local.subjectId,
-      itemId: local.itemId,
-      kind: local.kind,
+      subjectId,
+      itemId,
+      kind,
       // Prefer the Google value  -  if the user edited it on Google, we
       // surface that. Fall back to the local cache when Google has nothing.
-      summary: ev.summary ?? local.summary,
-      description: ev.description ?? local.description,
+      summary: ev.summary ?? cachedSummary,
+      description: ev.description ?? cachedDescription,
       startISO,
       endISO,
-      room: ev.location ?? local.room,
-      attachments: local.attachments,
+      room: ev.location ?? cachedRoom,
+      attachments,
       recurrence: null,
-      sourceLabel: local.sourceLabel,
-      lastSyncedAt: local.lastSyncedAt,
+      sectionCode: local?.sectionCode ?? null,
+      sourceLabel,
+      lastSyncedAt,
     });
   }
   logger.info(
@@ -97,10 +165,28 @@ export async function listGoogleEvents(
       timeMin,
       timeMax,
       googleCount: items.length,
-      matchedLocal: out.length,
+      matchedLocal: viaLocal,
+      matchedViaSummary: viaSummary,
+      unattributed,
+      unattributedSample,
       subjectId: opts.subjectId,
     },
     'google calendar read',
   );
   return out;
+}
+
+function normCode(s: string): string {
+  return s.replace(/\s+/g, '').toUpperCase();
+}
+
+function guessSubjectFromSummary(
+  summary: string | null | undefined,
+  index: Map<string, Subject>,
+): Subject | null {
+  if (!summary) return null;
+  // Match the first "<DEPT> <NUM>" token in the summary, e.g. "CMPT 307 LEC".
+  const m = /\b([A-Z]{2,4})\s*(\d{2,3}[A-Z]?)\b/.exec(summary);
+  if (!m) return null;
+  return index.get(normCode(`${m[1]}${m[2]}`)) ?? null;
 }
