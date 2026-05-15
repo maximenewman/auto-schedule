@@ -145,11 +145,15 @@ export class Store {
 
   async saveCourSysCookies(
     userId: number,
-    cookies: unknown,
+    cookies: unknown[],
   ): Promise<void> {
+    // The sql.json typing is strict (JSONValue tree). Cookie payloads come
+    // from an external source — cast through unknown rather than fight the
+    // recursive type.
+    const payload = cookies as unknown as Parameters<typeof this.sql.json>[0];
     await this.sql`
       UPDATE users SET
-        coursys_cookies = ${JSON.stringify(cookies)}::jsonb,
+        coursys_cookies = ${this.sql.json(payload)},
         coursys_cookies_updated_at = now(),
         updated_at = now()
       WHERE id = ${userId}
@@ -222,11 +226,11 @@ export class Store {
     sourceLabel: string | null,
     userId: number = DEFAULT_USER_ID,
   ): Promise<void> {
-    const attachments = JSON.stringify(event.attachments);
+    // postgres.js auto-serialises arrays/objects as jsonb when bound directly
+    // — do NOT manually JSON.stringify or use ::jsonb, that double-encodes the
+    // value and stores it as a jsonb string scalar instead of an array.
     const recurrence =
-      event.recurrence && event.recurrence.length > 0
-        ? JSON.stringify(event.recurrence)
-        : null;
+      event.recurrence && event.recurrence.length > 0 ? event.recurrence : null;
     await this.sql`
       INSERT INTO calendar_items (
         user_id, event_id, subject_id, item_id, kind, summary, description,
@@ -236,7 +240,9 @@ export class Store {
         ${userId}, ${eventId}, ${subjectId}, ${event.itemId}, ${event.kind},
         ${event.summary}, ${event.description}, ${event.startDateTime},
         ${event.endDateTime}, ${event.room},
-        ${attachments}::jsonb, ${recurrence}::jsonb, ${sourceLabel}, now()
+        ${this.sql.json(event.attachments)},
+        ${recurrence === null ? null : this.sql.json(recurrence)},
+        ${sourceLabel}, now()
       )
       ON CONFLICT (user_id, event_id) DO UPDATE SET
         subject_id = EXCLUDED.subject_id,
@@ -506,7 +512,7 @@ export class Store {
           ${userId}, ${subject.id}, ${subject.code ?? null}, ${subject.name},
           ${subject.professor}, ${subject.room ?? null}, ${subject.term ?? null},
           ${subject.color ?? null}, ${subject.destinationFolder},
-          ${JSON.stringify(subject.sources)}::jsonb, now(), now()
+          ${this.sql.json(subject.sources)}, now(), now()
         )
       `;
       return { ok: true };
@@ -530,7 +536,7 @@ export class Store {
         term = ${subject.term ?? null},
         color = ${subject.color ?? null},
         destination_folder = ${subject.destinationFolder},
-        sources = ${JSON.stringify(subject.sources)}::jsonb,
+        sources = ${this.sql.json(subject.sources)},
         updated_at = now()
       WHERE user_id = ${userId} AND id = ${subject.id}
     `;

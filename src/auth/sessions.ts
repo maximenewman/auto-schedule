@@ -31,13 +31,14 @@ export async function endSession(store: Store, sessionId: string): Promise<void>
 }
 
 export function cookieOptions(expiresAt: Date) {
-  // `secure: 'auto'` is what we want in @fastify/cookie 11+: it sets Secure
-  // when the request was over HTTPS, off otherwise. Lets localhost dev work
-  // without HTTPS while still enforcing Secure in production.
+  // SameSite=None is required so the companion browser extension can attach
+  // the session cookie on its cross-origin POST to /api/coursys/cookies.
+  // Modern browsers treat http://localhost as a secure context for cookie
+  // purposes, so SameSite=None; Secure works in dev too — no need to branch.
   return {
     httpOnly: true,
-    sameSite: 'lax' as const,
-    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'none' as const,
+    secure: true,
     path: '/',
     expires: expiresAt,
     signed: true,

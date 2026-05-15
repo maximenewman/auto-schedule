@@ -3,6 +3,7 @@ import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
 import fastifyMultipart from '@fastify/multipart';
 import fastifyCookie from '@fastify/cookie';
+import fastifyCors from '@fastify/cors';
 import { resolve, dirname } from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -46,6 +47,25 @@ async function main(): Promise<void> {
     );
   }
   await app.register(fastifyCookie, { secret: cookieSecret });
+
+  // The companion browser extension POSTs cookies from
+  // chrome-extension://<id>. Allow that origin (plus the dev UI origin) with
+  // credentials so the session cookie travels on the upload.
+  await app.register(fastifyCors, {
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true); // same-origin / curl / server-to-server
+      if (origin.startsWith('chrome-extension://')) return cb(null, true);
+      if (origin.startsWith('moz-extension://')) return cb(null, true);
+      const allowed = (process.env.CORS_ALLOWED_ORIGINS ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (allowed.includes(origin)) return cb(null, true);
+      return cb(null, false);
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  });
 
   // Preserve the raw JSON bytes alongside the parsed body. The WhatsApp
   // webhook verifies an HMAC over the exact payload Meta sent, so we can't
