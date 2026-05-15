@@ -11,12 +11,6 @@ export interface SeenEmailRow {
   processedAt: string;
 }
 
-export interface DownloadedFileRow {
-  fileHash: string;
-  path: string;
-  downloadedAt: string;
-}
-
 export interface CalendarItemRow {
   eventId: string;
   subjectId: string;
@@ -147,54 +141,46 @@ export class Store {
     `;
   }
 
-  // ---- downloaded files (Phase D will drop this) ------------------------
+  // ---- CourSys cookies -------------------------------------------------
 
-  async hasDownloadedFile(
-    fileHash: string,
-    userId: number = DEFAULT_USER_ID,
-  ): Promise<boolean> {
-    const rows = await this.sql<{ exists: boolean }[]>`
-      SELECT EXISTS (
-        SELECT 1 FROM downloaded_files
-         WHERE user_id = ${userId} AND file_hash = ${fileHash}
-      ) AS "exists"
-    `;
-    return rows[0]?.exists === true;
-  }
-
-  async recordDownloadedFile(
-    fileHash: string,
-    path: string,
-    userId: number = DEFAULT_USER_ID,
+  async saveCourSysCookies(
+    userId: number,
+    cookies: unknown,
   ): Promise<void> {
     await this.sql`
-      INSERT INTO downloaded_files (user_id, file_hash, path, downloaded_at)
-      VALUES (${userId}, ${fileHash}, ${path}, now())
-      ON CONFLICT (user_id, file_hash)
-      DO UPDATE SET path = EXCLUDED.path, downloaded_at = EXCLUDED.downloaded_at
+      UPDATE users SET
+        coursys_cookies = ${JSON.stringify(cookies)}::jsonb,
+        coursys_cookies_updated_at = now(),
+        updated_at = now()
+      WHERE id = ${userId}
     `;
   }
 
-  async listDownloadedFilesByPathPrefix(
-    prefix: string,
-    userId: number = DEFAULT_USER_ID,
-  ): Promise<DownloadedFileRow[]> {
-    // destinationFolder in subjects is forward-slashed; stored paths use the
-    // host's separator (backslash on Windows). Normalise on the read path so
-    // either form matches.
-    const normalizedPrefix = prefix.replace(/\\/g, '/').replace(/\/+$/, '');
-    const like = `${normalizedPrefix}/%`;
-    const rows = await this.sql<DownloadedFileRow[]>`
+  async getCourSysCookies(userId: number): Promise<{
+    cookies: unknown[];
+    updatedAt: Date | null;
+  } | null> {
+    const rows = await this.sql<
+      Array<{ cookies: unknown; updatedAt: Date | null }>
+    >`
       SELECT
-        file_hash      AS "fileHash",
-        path           AS "path",
-        downloaded_at  AS "downloadedAt"
-      FROM downloaded_files
-      WHERE user_id = ${userId}
-        AND REPLACE(path, '\\', '/') LIKE ${like}
-      ORDER BY downloaded_at DESC
+        coursys_cookies            AS "cookies",
+        coursys_cookies_updated_at AS "updatedAt"
+      FROM users WHERE id = ${userId}
     `;
-    return rows;
+    const row = rows[0];
+    if (!row || !Array.isArray(row.cookies)) return null;
+    return { cookies: row.cookies, updatedAt: row.updatedAt };
+  }
+
+  async clearCourSysCookies(userId: number): Promise<void> {
+    await this.sql`
+      UPDATE users SET
+        coursys_cookies = NULL,
+        coursys_cookies_updated_at = NULL,
+        updated_at = now()
+      WHERE id = ${userId}
+    `;
   }
 
   // ---- synced events ----------------------------------------------------

@@ -5,7 +5,7 @@ import { logger } from './logger.js';
 import { DEFAULT_USER_ID, Store } from './state/store.js';
 import { loadSubjects } from './config/subjectsStore.js';
 import { getAuthorizedClient } from './auth/google.js';
-import { runCourSysSetup, CourSysAuthError } from './auth/coursys.js';
+import { CourSysAuthError } from './auth/coursys.js';
 import { upsertEvent } from './sync/calendar.js';
 import { runPipeline } from './pipeline.js';
 import { notifyAuthFailure } from './notify/notifier.js';
@@ -16,7 +16,6 @@ import { sendDailyDigest } from './bot/daily.js';
 
 type Command =
   | 'run'
-  | 'setup:coursys'
   | 'test:calendar'
   | 'import:sfu'
   | 'sync:ical'
@@ -24,7 +23,6 @@ type Command =
 
 const COMMANDS: readonly Command[] = [
   'run',
-  'setup:coursys',
   'test:calendar',
   'import:sfu',
   'sync:ical',
@@ -120,10 +118,6 @@ async function main(): Promise<void> {
       } finally {
         await store.close();
       }
-      return;
-    }
-    case 'setup:coursys': {
-      await runCourSysSetup();
       return;
     }
     case 'sync:ical': {

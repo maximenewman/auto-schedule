@@ -1,7 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { spawn } from 'node:child_process';
-import { basename, resolve as resolvePath } from 'node:path';
-import { statSync, existsSync } from 'node:fs';
+import { resolve as resolvePath } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { ZodError } from 'zod';
 import { DEFAULT_USER_ID, type StateStore } from '../state/store.js';
@@ -45,6 +44,7 @@ import {
   buildGoogleAuthUrl,
   exchangeCodeForTokens,
 } from '../auth/google.js';
+import { isValidCookie } from '../auth/coursys.js';
 import {
   SESSION_COOKIE,
   cookieOptions,
@@ -199,6 +199,49 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
     };
   });
 
+  // ---- CourSys cookie upload ------------------------------------------
+
+  app.get('/api/coursys/cookies', async (req) => {
+    const userId = req.userId!;
+    const row = await ctx.store.getCourSysCookies(userId);
+    if (!row) return { configured: false, count: 0, updatedAt: null };
+    return {
+      configured: row.cookies.length > 0,
+      count: row.cookies.length,
+      updatedAt: row.updatedAt ? row.updatedAt.toISOString() : null,
+    };
+  });
+
+  app.post('/api/coursys/cookies', async (req, reply) => {
+    const userId = req.userId!;
+    const body = req.body as { consent?: unknown; cookies?: unknown };
+    if (body.consent !== true) {
+      return reply.code(400).send({
+        error:
+          'consent required — confirm you understand the app uses these cookies to act on your CourSys session',
+      });
+    }
+    if (!Array.isArray(body.cookies)) {
+      return reply.code(400).send({ error: 'cookies must be an array' });
+    }
+    const valid = body.cookies.filter(isValidCookie);
+    if (valid.length === 0) {
+      return reply.code(400).send({
+        error:
+          'no usable cookies in payload — expected objects with name + value strings',
+      });
+    }
+    await ctx.store.saveCourSysCookies(userId, valid);
+    logger.info({ userId, count: valid.length }, 'coursys: cookies uploaded');
+    return { configured: true, count: valid.length };
+  });
+
+  app.delete('/api/coursys/cookies', async (req) => {
+    const userId = req.userId!;
+    await ctx.store.clearCourSysCookies(userId);
+    return { configured: false };
+  });
+
   app.post('/auth/logout', async (req, reply) => {
     const cookie = req.cookies?.[SESSION_COOKIE];
     if (cookie) {
@@ -246,26 +289,23 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
     const now = new Date().toISOString();
     const subjects = await loadSubjects(ctx.store, userId);
     const events = await readEvents(userId, { fromISO: now });
-    return Promise.all(
-      subjects.map(async (s) => {
-        const subjectEvents = events.filter((e) => e.subjectId === s.id);
-        const upcomingDeadlines = subjectEvents.filter(
-          (e) => e.kind === 'assignment' || e.kind === 'midterm' || e.kind === 'exam',
-        );
-        const files = await ctx.store.listDownloadedFilesByPathPrefix(
-          s.destinationFolder,
-          userId,
-        );
-        return {
-          ...serializeSubject(s),
-          counts: {
-            upcomingDeadlines: upcomingDeadlines.length,
-            files: files.length,
-            sources: s.sources.length,
-          },
-        };
-      }),
-    );
+    return subjects.map((s) => {
+      const subjectEvents = events.filter((e) => e.subjectId === s.id);
+      const upcomingDeadlines = subjectEvents.filter(
+        (e) => e.kind === 'assignment' || e.kind === 'midterm' || e.kind === 'exam',
+      );
+      return {
+        ...serializeSubject(s),
+        counts: {
+          upcomingDeadlines: upcomingDeadlines.length,
+          // `files` left at 0 so existing dashboard widgets keep rendering;
+          // attachment downloads return in a later phase backed by object
+          // storage rather than a local folder.
+          files: 0,
+          sources: s.sources.length,
+        },
+      };
+    });
   });
 
   app.get('/api/subjects/:id', async (req, reply) => {
@@ -330,28 +370,6 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
     return readEvents(userId, { subjectId: id, fromISO, toISO });
   });
 
-  app.get('/api/subjects/:id/files', async (req, reply) => {
-    const userId = req.userId!;
-    const { id } = req.params as { id: string };
-    const subject = await findSubject(ctx.store, id, userId);
-    if (!subject) return reply.code(404).send({ error: 'not found' });
-    const rows = await ctx.store.listDownloadedFilesByPathPrefix(subject.destinationFolder, userId);
-    return rows.map((r) => {
-      let bytes: number | null = null;
-      try {
-        if (existsSync(r.path)) bytes = statSync(r.path).size;
-      } catch {
-        /* ignore */
-      }
-      return {
-        filename: basename(r.path),
-        path: r.path,
-        size: bytes,
-        addedISO: r.downloadedAt,
-      };
-    });
-  });
-
   app.get('/api/status', async (req): Promise<SyncStatus & {
     running: RunState['current'];
     lastRun: RunState['lastRun'];
@@ -370,14 +388,17 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
             e.lastSyncedAt <= lastRun.finishedAt,
         ).length
       : 0;
-    const cookie = coursysCookieAge();
+    const [cookie, googleOk] = await Promise.all([
+      coursysCookieAge(ctx.store, userId),
+      googleAuthExists(ctx.store, userId),
+    ]);
     return {
       lastRunISO,
       nextRunISO: nextCronISO(),
       itemsAddedLastRun,
       itemsAddedLastWeek: itemsLastWeek,
       agentErrorsLastWeek: countRecentAgentErrors(),
-      googleAuthOk: googleAuthExists(),
+      googleAuthOk: googleOk,
       coursysAuthOk: cookie.ok,
       coursysExpiresInDays: cookie.expiresInDays,
       running: ctx.runState.current,

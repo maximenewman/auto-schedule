@@ -1,16 +1,13 @@
-/// <reference lib="dom" />
 import { createHash } from 'node:crypto';
-import puppeteer, { type Browser } from 'puppeteer';
+import * as cheerio from 'cheerio';
 import type { Source, Subject } from '../config/subjects.js';
 import type { StateStore } from '../state/store.js';
 import type { AttachmentRef, SourceFetcher, SourceItem } from './types.js';
-import {
-  CourSysAuthError,
-  attachCookies,
-  loadCookies,
-  validateSession,
-} from '../auth/coursys.js';
+import { CourSysAuthError, loadCookies } from '../auth/coursys.js';
 import { logger } from '../logger.js';
+
+const CAS_HOST_RE = /(?:^|\.)(?:cas|sso)\.sfu\.ca$/;
+const ATTACHMENT_EXT_RE = /\.(pdf|docx?|pptx?|zip|ipynb)$/i;
 
 interface ScrapedPage {
   text: string;
@@ -18,29 +15,14 @@ interface ScrapedPage {
 }
 
 export class SiteSource implements SourceFetcher {
-  private browserPromise?: Promise<Browser>;
-
   constructor(
     private readonly store: StateStore,
     private readonly userId?: number,
   ) {}
 
-  private getBrowser(): Promise<Browser> {
-    if (!this.browserPromise) {
-      this.browserPromise = puppeteer.launch({
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
-      });
-    }
-    return this.browserPromise;
-  }
-
   async close(): Promise<void> {
-    if (this.browserPromise) {
-      const b = await this.browserPromise;
-      await b.close();
-      this.browserPromise = undefined;
-    }
+    // Nothing to clean up — fetch is stateless. Kept for API compatibility
+    // with the previous puppeteer-backed implementation.
   }
 
   async fetchNew(subject: Subject, source: Source): Promise<SourceItem[]> {
@@ -48,54 +30,41 @@ export class SiteSource implements SourceFetcher {
       throw new Error(`SiteSource called with non-site source: ${source.type}`);
     }
 
-    const browser = await this.getBrowser();
-    const page = await browser.newPage();
-    try {
-      const cookies = loadCookies();
-      await attachCookies(page, cookies);
-      logger.info({ subjectId: subject.id, url: source.url }, 'site: validating session');
-      await validateSession(page);
+    const cookies = await loadCookies(this.store, this.userId);
+    const cookieHeader = buildCookieHeader(cookies);
 
-      logger.info({ subjectId: subject.id, url: source.url }, 'site: navigating');
-      await page.goto(source.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-      // Detect a mid-session redirect to CAS too.
-      const landing = new URL(page.url());
-      if (landing.hostname.endsWith('sfu.ca') && /cas|sso/.test(landing.hostname)) {
-        throw new CourSysAuthError(`redirected to ${landing.hostname} for ${source.url}`);
-      }
+    logger.info({ subjectId: subject.id, url: source.url }, 'site: fetching');
+    const html = await fetchHtml(source.url, cookieHeader);
 
-      const scraped = await scrapePage(page, source.url);
-      const hash = sha256(scraped.text);
-      const prior = await this.store.getSiteHash(subject.id, source.url, this.userId);
+    const scraped = scrapeHtml(html, source.url);
+    const hash = sha256(scraped.text);
+    const prior = await this.store.getSiteHash(subject.id, source.url, this.userId);
+    logger.info(
+      {
+        subjectId: subject.id,
+        url: source.url,
+        chars: scraped.text.length,
+        attachments: scraped.attachments.length,
+        hash: hash.slice(0, 12),
+      },
+      'site: scraped',
+    );
+    if (prior === hash) {
       logger.info(
-        {
-          subjectId: subject.id,
-          url: source.url,
-          chars: scraped.text.length,
-          attachments: scraped.attachments.length,
-          hash: hash.slice(0, 12),
-        },
-        'site: scraped',
+        { subjectId: subject.id, url: source.url },
+        'site: content unchanged  -  skipping agent',
       );
-      if (prior === hash) {
-        logger.info(
-          { subjectId: subject.id, url: source.url },
-          'site: content unchanged  -  skipping agent',
-        );
-        return [];
-      }
-
-      return [
-        {
-          sourceItemId: source.url,
-          content: scraped.text,
-          attachments: scraped.attachments,
-          meta: { url: source.url, contentHash: hash },
-        },
-      ];
-    } finally {
-      await page.close();
+      return [];
     }
+
+    return [
+      {
+        sourceItemId: source.url,
+        content: scraped.text,
+        attachments: scraped.attachments,
+        meta: { url: source.url, contentHash: hash },
+      },
+    ];
   }
 
   async markProcessed(subject: Subject, source: Source, item: SourceItem): Promise<void> {
@@ -107,57 +76,98 @@ export class SiteSource implements SourceFetcher {
   }
 }
 
-async function scrapePage(
-  page: import('puppeteer').Page,
-  baseUrl: string,
-): Promise<ScrapedPage> {
-  const result = await page.evaluate(() => {
-    const main =
-      document.querySelector('main') ??
-      document.querySelector('#content') ??
-      document.body;
-    const text = main ? (main as HTMLElement).innerText : '';
+interface StoredCookie {
+  name: string;
+  value: string;
+  domain?: string;
+}
 
-    const seen = new Set<string>();
-    const links: { href: string; text: string }[] = [];
-    for (const a of Array.from(document.querySelectorAll('a[href]'))) {
-      const href = (a as HTMLAnchorElement).href;
-      if (!href || seen.has(href)) continue;
-      seen.add(href);
-      links.push({
-        href,
-        text: (a.textContent ?? '').trim(),
-      });
-    }
-    return { text, links };
+function buildCookieHeader(cookies: StoredCookie[]): string {
+  // We don't filter by domain here — every cookie the user has saved goes on
+  // every request. CourSys auth scatters cookies across coursys.sfu.ca and
+  // cas.sfu.ca; both are reached during the redirect dance, so sending all
+  // of them is safer than trying to second-guess the auth flow.
+  return cookies
+    .filter((c) => c.name && c.value)
+    .map((c) => `${c.name}=${c.value}`)
+    .join('; ');
+}
+
+async function fetchHtml(url: string, cookieHeader: string): Promise<string> {
+  const res = await fetch(url, {
+    redirect: 'follow',
+    headers: {
+      cookie: cookieHeader,
+      // Some SFU pages serve a different (login-wall) variant to unknown UAs;
+      // claim a real browser so the cookie-based path stays open.
+      'user-agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+        '(KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+      accept: 'text/html,application/xhtml+xml',
+    },
   });
+  // If the redirect chain landed us on CAS/SSO, the cookies are stale.
+  const finalUrl = new URL(res.url);
+  if (CAS_HOST_RE.test(finalUrl.hostname)) {
+    throw new CourSysAuthError(
+      `redirected to ${finalUrl.hostname} for ${url}`,
+    );
+  }
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) {
+      throw new CourSysAuthError(`HTTP ${res.status} on ${url}`);
+    }
+    throw new Error(`site fetch failed: HTTP ${res.status} ${res.statusText} ${url}`);
+  }
+  return await res.text();
+}
 
-  const text = normalize(result.text);
+function scrapeHtml(html: string, baseUrl: string): ScrapedPage {
+  const $ = cheerio.load(html);
+
+  // Drop content that would only noise up the text payload sent to the
+  // agent (scripts, styles, nav chrome). cheerio's remove() is mutating.
+  $('script, style, noscript').remove();
+
+  // Mirror the puppeteer code's preference: pick the most-likely "content"
+  // block; fall back to body. innerText-equivalent normalisation happens
+  // in normalizeText().
+  const main = $('main').first();
+  const content = main.length ? main : $('#content').first();
+  const root = content.length ? content : $('body');
+  const rawText = root.text();
+  const text = normalizeText(rawText);
+
+  const seen = new Set<string>();
   const attachments: AttachmentRef[] = [];
-  for (const link of result.links) {
-    if (!/\.(pdf|docx?|pptx?|zip|ipynb)$/i.test(link.href)) continue;
+  $('a[href]').each((_, el) => {
+    const href = $(el).attr('href');
+    if (!href) return;
     let absolute: string;
     try {
-      absolute = new URL(link.href, baseUrl).toString();
+      absolute = new URL(href, baseUrl).toString();
     } catch {
-      continue;
+      return;
     }
+    if (seen.has(absolute)) return;
+    seen.add(absolute);
+    if (!ATTACHMENT_EXT_RE.test(absolute)) return;
     const filenameMatch = absolute.match(/\/([^/?#]+)(?:[?#]|$)/);
-    const filename = filenameMatch?.[1] ?? link.text ?? 'attachment';
+    const filename = (filenameMatch?.[1] ?? $(el).text().trim()) || 'attachment';
     attachments.push({
       url: absolute,
       filename: decodeURIComponent(filename),
       meta: { sourceHost: new URL(absolute).hostname },
     });
-  }
+  });
+
   return { text, attachments };
 }
 
-function normalize(text: string): string {
+function normalizeText(text: string): string {
   return text
     .split('\n')
-    .map((line) => line.replace(/\s+$/g, '').trimEnd())
-    .map((line) => line.replace(/[ \t]{2,}/g, ' '))
+    .map((line) => line.replace(/[ \t]+/g, ' ').trimEnd())
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();

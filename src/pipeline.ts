@@ -4,7 +4,6 @@ import type { StateStore } from './state/store.js';
 import { FetcherRegistry } from './sources/factory.js';
 import { extractEvents } from './agent/extractor.js';
 import { upsertEvent } from './sync/calendar.js';
-import { downloadAttachment } from './sync/files.js';
 import { logger } from './logger.js';
 import { CourSysAuthError } from './auth/coursys.js';
 import { runFullIcalSync, ICAL_URL_SETTING } from './import/icalSync.js';
@@ -150,25 +149,12 @@ async function processSource(
       } catch (err) {
         log.error({ err, itemId: event.itemId }, 'calendar upsert failed');
       }
-
-      for (const attachment of event.attachments) {
-        await downloadAttachment(attachment, subject.destinationFolder, {
-          googleAuth: ctx.googleAuth,
-          store: ctx.store,
-          userId: ctx.userId,
-        });
-      }
     }
 
-    // Source-level attachments (e.g. files referenced in an email or page but
-    // not pulled into a specific event)  -  best-effort download too.
-    for (const attachment of item.attachments) {
-      await downloadAttachment(attachment, subject.destinationFolder, {
-        googleAuth: ctx.googleAuth,
-        store: ctx.store,
-        userId: ctx.userId,
-      });
-    }
+    // Attachments used to be downloaded to subject.destinationFolder here.
+    // Phase D removed that path; attachment URLs travel with the calendar
+    // event (in the description) so the user can click through from Google
+    // Calendar instead.
 
     // Mark processed AFTER calendar upserts so a failure mid-loop re-runs cleanly.
     await fetcher.markProcessed(subject, source, item);
