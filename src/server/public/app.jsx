@@ -47,7 +47,7 @@ function App() {
   } else if (route === 'subjects') {
     body = <SubjectsPage now={now} />;
   } else {
-    body = <SchedulePage now={now} tweaks={tweaks} onSyncDone={forceRender} />;
+    body = <SchedulePage now={now} tweaks={tweaks} />;
   }
 
   return (

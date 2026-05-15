@@ -1,5 +1,5 @@
 /* global React, Util */
-const { useState, useEffect, useMemo, useCallback } = React;
+const { useState, useEffect, useMemo } = React;
 
 const HOUR_START = 8;
 const HOUR_END = 22;
@@ -615,43 +615,11 @@ function ImportSfuButton() {
   );
 }
 
-function SchedulePage({ now, tweaks, onSyncDone }) {
+function SchedulePage({ now, tweaks }) {
   const [weekStart, setWeekStart] = useState(() => Util.startOfWeek(now));
-  const [syncing, setSyncing] = useState(false);
   const weekEnd = Util.addDays(weekStart, 6);
 
   const heroVariant = tweaks.hero || 'hero';
-
-  const handleSync = useCallback(async () => {
-    if (syncing) return;
-    setSyncing(true);
-    try {
-      const res = await window.api.sync();
-      if (!res.started) {
-        console.warn('sync rejected', res);
-        return;
-      }
-      // Poll status until the run finishes. The 30s status poller in app.jsx
-      // will pick the new data up too, but a tighter poll here gives the user
-      // immediate feedback on a manually-triggered run.
-      const targetRunId = res.runId;
-      const start = Date.now();
-      while (Date.now() - start < 5 * 60 * 1000) {
-        await new Promise((r) => setTimeout(r, 1500));
-        const status = await window.api.status();
-        window.SYNC_STATUS = status;
-        if (status.lastRun && status.lastRun.runId === targetRunId) {
-          await window.refreshData();
-          break;
-        }
-      }
-    } catch (err) {
-      console.error('sync failed', err);
-    } finally {
-      setSyncing(false);
-      if (onSyncDone) onSyncDone();
-    }
-  }, [syncing, onSyncDone]);
 
   return (
     <div data-screen-label="Schedule">
@@ -663,12 +631,6 @@ function SchedulePage({ now, tweaks, onSyncDone }) {
             <IcalSubscriptionButton />
             <ImportSfuButton />
             <button className="btn-ghost-pill" onClick={() => window.location.hash = '#/subjects'}>Subjects</button>
-            <button
-              className="btn-primary"
-              onClick={handleSync}
-              disabled={syncing || window.SYNC_STATUS.running}>
-              {syncing || window.SYNC_STATUS.running ? 'Syncing...' : 'Sync now'}
-            </button>
           </>
         )}
       />
