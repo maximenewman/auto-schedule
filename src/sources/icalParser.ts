@@ -173,6 +173,21 @@ function parseCategories(value: string): string[] {
   return out;
 }
 
+/** Bump a local-time ISO string forward by exactly one calendar day,
+ *  preserving the offset/time-of-day. Used for all-day events that omit
+ *  DTEND. */
+function addOneLocalDay(iso: string): string {
+  // "2026-09-07T00:00:00-07:00" -> "2026-09-08T00:00:00-07:00"
+  const m = /^(\d{4})-(\d{2})-(\d{2})(T.*)$/.exec(iso);
+  if (!m) return iso;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  d.setUTCDate(d.getUTCDate() + 1);
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}${m[4]}`;
+}
+
 export function parseIcal(text: string): IcalEvent[] {
   const lines = unfold(text);
   const events: IcalEvent[] = [];
@@ -184,13 +199,21 @@ export function parseIcal(text: string): IcalEvent[] {
     }
     if (line === 'END:VEVENT') {
       if (cur && cur.uid && cur.dtstart) {
+        // RFC 5545: when DTEND is absent on a DATE-valued event, the event
+        // implicitly spans exactly one day. CourSys's HOLIDAY entries do
+        // this, and without the +1 day fix the downstream renderer treats
+        // them as zero-length midnight blocks and filters them out.
+        let dtend = cur.dtend ?? cur.dtstart;
+        if (cur.allDay && dtend === cur.dtstart) {
+          dtend = addOneLocalDay(cur.dtstart);
+        }
         events.push({
           uid: cur.uid,
           summary: cur.summary ?? '',
           description: cur.description ?? '',
           location: cur.location ?? null,
           dtstart: cur.dtstart,
-          dtend: cur.dtend ?? cur.dtstart,
+          dtend,
           rrule: cur.rrule ?? null,
           categories: cur.categories ?? [],
           allDay: cur.allDay ?? false,

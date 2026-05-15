@@ -50,16 +50,21 @@ function WeekGrid({ weekStart, now, onEventClick }) {
               const isInstant = e.start.getTime() === e.end.getTime();
               const sameDay = Util.sameDay(e.start, e.end);
               const startH = Util.hoursDecimal(e.start);
-              // Events that end on a later day (all-day holidays, multi-day
-              // events) get their endH treated as midnight-tomorrow (24)
-              // rather than midnight-today (0). Without this, the
-              // `endH < HOUR_START` check below silently filters them out.
+              // Holidays come from CourSys with `DTSTART;VALUE=DATE` and
+              // no DTEND, so our parser stores start === end at midnight.
+              // Treat any event anchored at midnight that's either instant
+              // or crosses a day boundary as a full-day banner.
+              const isAllDay = startH === 0 && (isInstant || !sameDay);
+              // Events that end on a later day (multi-day events) get
+              // their endH clamped to 24 instead of `getHours() === 0` of
+              // midnight-next-day, otherwise the filter below silently
+              // drops them.
               let endH;
-              if (isInstant) endH = startH + 0.6;
+              if (isAllDay) endH = HOUR_END; // banner — drawn separately
+              else if (isInstant) endH = startH + 0.6;
               else if (!sameDay) endH = 24;
               else endH = Util.hoursDecimal(e.end);
-              const isAllDay = !sameDay && startH === 0;
-              if (endH < HOUR_START || startH > HOUR_END) return null;
+              if (!isAllDay && (endH < HOUR_START || startH > HOUR_END)) return null;
               // All-day events render as a thin banner pinned to the top of
               // the day column instead of a full-column block.
               const top = isAllDay
