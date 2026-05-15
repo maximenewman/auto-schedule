@@ -25,6 +25,7 @@ import {
 import { parseSchedulePdf } from '../import/sfuPdf.js';
 import { bootstrapFromSchedule } from '../import/bootstrap.js';
 import { syncIcalSubscription, runFullIcalSync, ICAL_URL_SETTING, type IcalProgress } from '../import/icalSync.js';
+import { syncAtomSubscription, ATOM_URL_SETTING, type AtomProgress } from '../import/atomSync.js';
 import { mergeSubject, mergeEvent } from '../import/dedup.js';
 import { planDedup } from '../import/dedupAgent.js';
 import { getAuthorizedClient } from '../auth/google.js';
@@ -553,6 +554,74 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
     } finally {
       raw.end();
     }
+  });
+
+  // ---- CourSys Atom feed (announcements) -------------------------------
+
+  app.get('/api/settings/atom-url', async (req) => {
+    const userId = req.userId!;
+    return { url: await ctx.store.getSetting(ATOM_URL_SETTING, userId) };
+  });
+
+  app.put('/api/settings/atom-url', async (req, reply) => {
+    const userId = req.userId!;
+    const body = req.body as { url?: unknown };
+    const raw = typeof body?.url === 'string' ? body.url.trim() : '';
+    if (raw === '') {
+      await ctx.store.deleteSetting(ATOM_URL_SETTING, userId);
+      return { url: null };
+    }
+    try {
+      const u = new URL(raw);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+        return reply.code(400).send({ error: 'url must be http(s)' });
+      }
+    } catch {
+      return reply.code(400).send({ error: 'invalid url' });
+    }
+    await ctx.store.setSetting(ATOM_URL_SETTING, raw, userId);
+    return { url: raw };
+  });
+
+  app.post('/api/import/atom', async (req, reply) => {
+    const userId = req.userId!;
+    const url = await ctx.store.getSetting(ATOM_URL_SETTING, userId);
+    if (!url) {
+      return reply.code(400).send({ error: 'no Atom URL configured' });
+    }
+    reply.hijack();
+    const raw = reply.raw;
+    raw.writeHead(200, {
+      'content-type': 'application/x-ndjson',
+      'cache-control': 'no-cache',
+      'x-accel-buffering': 'no',
+    });
+    const emit = (evt: AtomProgress) => {
+      raw.write(JSON.stringify(evt) + '\n');
+    };
+    try {
+      await syncAtomSubscription(url, { store: ctx.store, userId }, emit);
+    } catch (err) {
+      logger.error({ err }, 'import:atom failed');
+      const message = err instanceof Error ? err.message : String(err);
+      try {
+        raw.write(JSON.stringify({ stage: 'error', message } satisfies AtomProgress) + '\n');
+      } catch {
+        /* response may already be closed */
+      }
+    } finally {
+      raw.end();
+    }
+  });
+
+  app.get('/api/announcements', async (req) => {
+    const userId = req.userId!;
+    const q = req.query as { subjectId?: string; limit?: string };
+    const limit = q.limit ? Math.max(1, Math.min(Number(q.limit) || 200, 1000)) : 200;
+    return ctx.store.listAnnouncements(
+      { subjectId: q.subjectId, limit },
+      userId,
+    );
   });
 
   app.post('/api/import/sfu', async (req, reply) => {
