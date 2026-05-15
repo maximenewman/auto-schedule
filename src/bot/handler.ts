@@ -64,6 +64,7 @@ export async function handleIncomingMessage(
   }));
 
   const started = Date.now();
+  const tools = await buildBotTools(store, userId);
   const result = await generateText({
     model: getProvider()(BOT_MODEL),
     temperature: 0.3,
@@ -71,7 +72,7 @@ export async function handleIncomingMessage(
     maxTokens: 800,
     system: systemPrompt(),
     messages,
-    tools: buildBotTools(store, userId),
+    tools,
   });
 
   const reply = result.text.trim() || 'sorry, I drew a blank — try again?';

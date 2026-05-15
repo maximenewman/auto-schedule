@@ -105,7 +105,7 @@ export async function sendDailyDigest(
   userId?: number,
 ): Promise<DailyDigestResult> {
   const cfg = loadMetaConfig();
-  const subjects = loadSubjects();
+  const subjects = await loadSubjects(store, userId);
   const { startISO, endISO, label } = todayBoundsISO();
   const rows = await store.listCalendarItems({ fromISO: startISO, toISO: endISO }, userId);
   const items = rows.map((r) => ({

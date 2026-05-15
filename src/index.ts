@@ -98,17 +98,14 @@ function pickUserId(): number {
 async function main(): Promise<void> {
   const command = parseCommand(process.argv);
   await maybeJitter(command);
-  const subjects = loadSubjects();
   const userId = pickUserId();
-  logger.info(
-    { command, subjectCount: subjects.length, userId, pid: process.pid },
-    'auto-schedule starting',
-  );
+  logger.info({ command, userId, pid: process.pid }, 'auto-schedule starting');
 
   switch (command) {
     case 'run': {
       const store = await Store.create();
       try {
+        const subjects = await loadSubjects(store, userId);
         const googleAuth = await getAuthorizedClient(store, userId);
         try {
           await runPipeline(subjects, { googleAuth, store, userId });

@@ -1,11 +1,10 @@
 import type { OAuth2Client } from 'google-auth-library';
 import {
-  findSubject,
-  saveSubjects,
   createSubject,
+  findSubject,
+  updateSubject,
   type Subject,
 } from '../config/subjectsStore.js';
-import { loadSubjects } from '../config/subjectsStore.js';
 import type { CalendarEvent } from '../agent/schema.js';
 import { upsertEvent } from '../sync/calendar.js';
 import type { StateStore } from '../state/store.js';
@@ -225,7 +224,6 @@ export async function bootstrapFromSchedule(
 
   // Pass 1: subjects.
   const term = termLabel(schedule.term);
-  const allSubjects = [...loadSubjects()];
   for (const course of schedule.courses) {
     const id = subjectIdFor(course);
     const next: Subject = {
@@ -238,18 +236,16 @@ export async function bootstrapFromSchedule(
       sources: [],
     };
 
-    const existing = findSubject(id);
+    const existing = await findSubject(opts.store, id, opts.userId);
     if (!existing) {
-      createSubject(next);
+      await createSubject(opts.store, next, opts.userId);
       result.subjectsCreated++;
     } else {
       const merged = mergeSubject(existing, next);
-      const idx = allSubjects.findIndex((s) => s.id === id);
-      if (idx >= 0) allSubjects[idx] = merged;
+      await updateSubject(opts.store, id, merged, opts.userId);
       result.subjectsMerged++;
     }
   }
-  if (result.subjectsMerged > 0) saveSubjects(allSubjects);
 
   // Pass 2: events.
   const sourceLabel = opts.sourceLabel ?? 'pdf:sfu';

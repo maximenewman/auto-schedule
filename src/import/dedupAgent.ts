@@ -145,7 +145,9 @@ export interface DedupAgentResult {
  * the model, so the prompt stays small even on a busy term.
  */
 export async function planDedup(ctx: DedupCtx): Promise<DedupAgentResult> {
-  const subjects = loadSubjects().filter((s) => !HIDDEN_SUBJECT_IDS.has(s.id));
+  const subjects = (await loadSubjects(ctx.store, ctx.userId)).filter(
+    (s) => !HIDDEN_SUBJECT_IDS.has(s.id),
+  );
   const events = await fetchEventsForDedup(ctx);
   const clusters = clusterByTimeConflict(events);
 

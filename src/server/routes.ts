@@ -244,7 +244,7 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
   app.get('/api/subjects', async (req) => {
     const userId = req.userId!;
     const now = new Date().toISOString();
-    const subjects = loadSubjects();
+    const subjects = await loadSubjects(ctx.store, userId);
     const events = await readEvents(userId, { fromISO: now });
     return Promise.all(
       subjects.map(async (s) => {
@@ -271,7 +271,7 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
   app.get('/api/subjects/:id', async (req, reply) => {
     const userId = req.userId!;
     const { id } = req.params as { id: string };
-    const subject = findSubject(id);
+    const subject = await findSubject(ctx.store, id, userId);
     if (!subject) return reply.code(404).send({ error: 'not found' });
     const nowISO = new Date().toISOString();
     const upcoming = await readEvents(userId, { subjectId: id, fromISO: nowISO });
@@ -283,8 +283,9 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
   });
 
   app.post('/api/subjects', async (req, reply) => {
+    const userId = req.userId!;
     try {
-      const created = createSubject(req.body);
+      const created = await createSubject(ctx.store, req.body, userId);
       return reply.code(201).send(serializeSubject(created));
     } catch (err) {
       return mapMutationError(err, reply);
@@ -292,9 +293,10 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
   });
 
   app.put('/api/subjects/:id', async (req, reply) => {
+    const userId = req.userId!;
     const { id } = req.params as { id: string };
     try {
-      const updated = updateSubject(id, req.body);
+      const updated = await updateSubject(ctx.store, id, req.body, userId);
       return serializeSubject(updated);
     } catch (err) {
       return mapMutationError(err, reply);
@@ -302,9 +304,10 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
   });
 
   app.delete('/api/subjects/:id', async (req, reply) => {
+    const userId = req.userId!;
     const { id } = req.params as { id: string };
     try {
-      deleteSubject(id);
+      await deleteSubject(ctx.store, id, userId);
       return reply.code(204).send();
     } catch (err) {
       return mapMutationError(err, reply);
@@ -320,7 +323,9 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
   app.get('/api/subjects/:id/events', async (req, reply) => {
     const userId = req.userId!;
     const { id } = req.params as { id: string };
-    if (!findSubject(id)) return reply.code(404).send({ error: 'not found' });
+    if (!(await findSubject(ctx.store, id, userId))) {
+      return reply.code(404).send({ error: 'not found' });
+    }
     const { fromISO, toISO } = readWindow(req);
     return readEvents(userId, { subjectId: id, fromISO, toISO });
   });
@@ -328,7 +333,7 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
   app.get('/api/subjects/:id/files', async (req, reply) => {
     const userId = req.userId!;
     const { id } = req.params as { id: string };
-    const subject = findSubject(id);
+    const subject = await findSubject(ctx.store, id, userId);
     if (!subject) return reply.code(404).send({ error: 'not found' });
     const rows = await ctx.store.listDownloadedFilesByPathPrefix(subject.destinationFolder, userId);
     return rows.map((r) => {

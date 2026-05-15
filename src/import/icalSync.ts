@@ -5,6 +5,7 @@ import {
   loadSubjects,
   type Subject,
 } from '../config/subjectsStore.js';
+import type { Store } from '../state/store.js';
 import type { CalendarEvent, EventKind } from '../agent/schema.js';
 import type { StateStore } from '../state/store.js';
 import { upsertEvent } from '../sync/calendar.js';
@@ -112,7 +113,7 @@ export async function syncIcalSubscription(
   // This is what stops a PDF-bootstrap subject (id "cmpt307") from being
   // duplicated when iCal later refers to it as "CMPT 307".
   const subjectCache = new Map<string, Subject>();
-  for (const s of loadSubjects()) {
+  for (const s of await loadSubjects(opts.store, opts.userId)) {
     subjectCache.set(normalizeCode(s.id), s);
     if (s.code) subjectCache.set(normalizeCode(s.code), s);
   }
@@ -129,7 +130,7 @@ export async function syncIcalSubscription(
     if (isHoliday(ev)) {
       subject = subjectCache.get(normalizeCode(HOLIDAYS_SUBJECT_ID));
       if (!subject) {
-        subject = autoCreateHolidaysSubject(baseFolder);
+        subject = await autoCreateHolidaysSubject(opts.store, baseFolder, opts.userId);
         subjectCache.set(normalizeCode(subject.id), subject);
         result.subjectsCreated++;
       }
@@ -147,7 +148,7 @@ export async function syncIcalSubscription(
       displayCode = code;
       subject = subjectCache.get(normalizeCode(code));
       if (!subject) {
-        subject = autoCreateSubject(code, baseFolder);
+        subject = await autoCreateSubject(opts.store, code, baseFolder, opts.userId);
         subjectCache.set(normalizeCode(subject.id), subject);
         subjectCache.set(normalizeCode(code), subject);
         result.subjectsCreated++;
@@ -359,7 +360,12 @@ function isHoliday(ev: IcalEvent): boolean {
   return ev.categories.some((c) => c.toUpperCase() === 'HOLIDAY');
 }
 
-function autoCreateSubject(code: string, baseFolder: string): Subject {
+async function autoCreateSubject(
+  store: Store,
+  code: string,
+  baseFolder: string,
+  userId?: number,
+): Promise<Subject> {
   const id = code.replace(/\s+/g, '').toLowerCase();
   const base = baseFolder.replace(/[\\/]+$/, '').replace(/\\/g, '/');
   const subject: Subject = {
@@ -371,20 +377,24 @@ function autoCreateSubject(code: string, baseFolder: string): Subject {
     sources: [],
   };
   try {
-    createSubject(subject);
+    await createSubject(store, subject, userId);
     logger.info({ id, code }, 'ical: auto-created subject');
   } catch (err) {
-    // Race between subjectCache lookup and disk; createSubject throws on
-    // conflict. Re-read from disk to recover the existing row.
-    const existing = findSubject(id);
+    // Race between subjectCache lookup and DB write — createSubject throws on
+    // conflict. Re-read the row instead so we use the existing one.
+    const existing = await findSubject(store, id, userId);
     if (!existing) throw err;
     return existing;
   }
   return subject;
 }
 
-function autoCreateHolidaysSubject(baseFolder: string): Subject {
-  const existing = findSubject(HOLIDAYS_SUBJECT_ID);
+async function autoCreateHolidaysSubject(
+  store: Store,
+  baseFolder: string,
+  userId?: number,
+): Promise<Subject> {
+  const existing = await findSubject(store, HOLIDAYS_SUBJECT_ID, userId);
   if (existing) return existing;
   const base = baseFolder.replace(/[\\/]+$/, '').replace(/\\/g, '/');
   const subject: Subject = {
@@ -398,10 +408,10 @@ function autoCreateHolidaysSubject(baseFolder: string): Subject {
     sources: [],
   };
   try {
-    createSubject(subject);
+    await createSubject(store, subject, userId);
     logger.info({ id: HOLIDAYS_SUBJECT_ID }, 'ical: auto-created holidays subject');
   } catch {
-    const re = findSubject(HOLIDAYS_SUBJECT_ID);
+    const re = await findSubject(store, HOLIDAYS_SUBJECT_ID, userId);
     if (re) return re;
   }
   return subject;

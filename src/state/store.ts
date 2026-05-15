@@ -1,6 +1,7 @@
 import type { Sql } from 'postgres';
 import { createConnection, runMigrations } from './db.js';
 import type { CalendarEvent, EventKind } from '../agent/schema.js';
+import type { Source, Subject } from '../config/subjects.js';
 
 export const DEFAULT_USER_ID = 1;
 
@@ -464,6 +465,102 @@ export class Store {
       .reverse();
   }
 
+  // ---- subjects --------------------------------------------------------
+
+  async listSubjects(userId: number = DEFAULT_USER_ID): Promise<Subject[]> {
+    const rows = await this.sql<SubjectDbRow[]>`
+      SELECT
+        id,
+        code,
+        name,
+        professor,
+        room,
+        term,
+        color,
+        destination_folder AS "destinationFolder",
+        sources
+      FROM subjects
+      WHERE user_id = ${userId}
+      ORDER BY name ASC
+    `;
+    return rows.map(rowToSubject);
+  }
+
+  async getSubject(
+    id: string,
+    userId: number = DEFAULT_USER_ID,
+  ): Promise<Subject | undefined> {
+    const rows = await this.sql<SubjectDbRow[]>`
+      SELECT
+        id,
+        code,
+        name,
+        professor,
+        room,
+        term,
+        color,
+        destination_folder AS "destinationFolder",
+        sources
+      FROM subjects
+      WHERE user_id = ${userId} AND id = ${id}
+    `;
+    return rows[0] ? rowToSubject(rows[0]) : undefined;
+  }
+
+  async insertSubject(
+    subject: Subject,
+    userId: number = DEFAULT_USER_ID,
+  ): Promise<{ ok: true } | { ok: false; reason: 'duplicate' }> {
+    try {
+      await this.sql`
+        INSERT INTO subjects (
+          user_id, id, code, name, professor, room, term, color,
+          destination_folder, sources, created_at, updated_at
+        ) VALUES (
+          ${userId}, ${subject.id}, ${subject.code ?? null}, ${subject.name},
+          ${subject.professor}, ${subject.room ?? null}, ${subject.term ?? null},
+          ${subject.color ?? null}, ${subject.destinationFolder},
+          ${JSON.stringify(subject.sources)}::jsonb, now(), now()
+        )
+      `;
+      return { ok: true };
+    } catch (err) {
+      // Postgres unique-violation = duplicate id for this user.
+      if (isUniqueViolation(err)) return { ok: false, reason: 'duplicate' };
+      throw err;
+    }
+  }
+
+  async replaceSubject(
+    subject: Subject,
+    userId: number = DEFAULT_USER_ID,
+  ): Promise<boolean> {
+    const result = await this.sql`
+      UPDATE subjects SET
+        code = ${subject.code ?? null},
+        name = ${subject.name},
+        professor = ${subject.professor},
+        room = ${subject.room ?? null},
+        term = ${subject.term ?? null},
+        color = ${subject.color ?? null},
+        destination_folder = ${subject.destinationFolder},
+        sources = ${JSON.stringify(subject.sources)}::jsonb,
+        updated_at = now()
+      WHERE user_id = ${userId} AND id = ${subject.id}
+    `;
+    return (result.count ?? 0) > 0;
+  }
+
+  async removeSubject(
+    id: string,
+    userId: number = DEFAULT_USER_ID,
+  ): Promise<boolean> {
+    const result = await this.sql`
+      DELETE FROM subjects WHERE user_id = ${userId} AND id = ${id}
+    `;
+    return (result.count ?? 0) > 0;
+  }
+
   // ---- users -----------------------------------------------------------
 
   async findOrCreateUserByGoogleSub(input: {
@@ -588,6 +685,53 @@ export interface SessionRow {
   id: string;
   userId: number;
   expiresAt: Date;
+}
+
+interface SubjectDbRow {
+  id: string;
+  code: string | null;
+  name: string;
+  professor: string;
+  room: string | null;
+  term: string | null;
+  color: string | null;
+  destinationFolder: string;
+  sources: unknown;
+}
+
+function rowToSubject(row: SubjectDbRow): Subject {
+  const sources = Array.isArray(row.sources)
+    ? (row.sources.filter(isValidSource) as Source[])
+    : [];
+  const out: Subject = {
+    id: row.id,
+    name: row.name,
+    professor: row.professor,
+    destinationFolder: row.destinationFolder,
+    sources,
+  };
+  if (row.code !== null) out.code = row.code;
+  if (row.room !== null) out.room = row.room;
+  if (row.term !== null) out.term = row.term;
+  if (row.color !== null) out.color = row.color;
+  return out;
+}
+
+function isValidSource(value: unknown): value is Source {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as { type?: unknown; label?: unknown; url?: unknown };
+  if (v.type === 'email') return typeof v.label === 'string';
+  if (v.type === 'site') return typeof v.url === 'string';
+  return false;
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  // postgres.js surfaces the SQLSTATE code on the error object.
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    (err as { code?: unknown }).code === '23505'
+  );
 }
 
 // Back-compat type alias so existing imports `StateStore` keep working.

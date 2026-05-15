@@ -1,9 +1,6 @@
 import { google } from 'googleapis';
 import type { OAuth2Client } from 'google-auth-library';
-import {
-  deleteSubject,
-  loadSubjects,
-} from '../config/subjectsStore.js';
+import { deleteSubject, loadSubjects } from '../config/subjectsStore.js';
 import type { StateStore } from '../state/store.js';
 import { logger } from '../logger.js';
 
@@ -46,7 +43,7 @@ export async function mergeSubject(opts: MergeOptions): Promise<MergeResult> {
   if (fromId === intoId) {
     throw new Error('mergeSubject: from and into are the same');
   }
-  const subjects = loadSubjects();
+  const subjects = await loadSubjects(store, userId);
   const from = subjects.find((s) => s.id === fromId);
   const into = subjects.find((s) => s.id === intoId);
   if (!from) throw new Error(`subject "${fromId}" not found`);
@@ -88,7 +85,7 @@ export async function mergeSubject(opts: MergeOptions): Promise<MergeResult> {
 
   result.localItemsDeleted = await store.deleteCalendarItemsForSubject(fromId, userId);
   result.localSyncedEventsDeleted = await store.deleteSyncedEventsForSubject(fromId, userId);
-  deleteSubject(fromId);
+  await deleteSubject(store, fromId, userId);
 
   logger.info(result, 'dedup: merge complete');
   return result;

@@ -62,8 +62,8 @@ function resolveSubjectId(input: string, subjects: Subject[]): string | null {
   return byName?.id ?? null;
 }
 
-export function buildBotTools(store: StateStore, userId?: number) {
-  const subjects = loadSubjects();
+export async function buildBotTools(store: StateStore, userId?: number) {
+  const subjects = await loadSubjects(store, userId);
 
   return {
     list_upcoming: tool({
