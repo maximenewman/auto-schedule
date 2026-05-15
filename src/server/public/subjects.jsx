@@ -526,33 +526,37 @@ function SubjectsPage({ now }) {
   );
 }
 
-function PipelineBlock() {
-  const s = window.SYNC_STATUS;
-  const lastLabel = s.lastRunISO
-    ? new Date(s.lastRunISO).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: false })
-    : ' - ';
-  const nextLabel = s.nextRunISO
-    ? new Date(s.nextRunISO).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: false })
-    : ' - ';
-  const errColor = s.agentErrorsLastWeek === 0 ? '#1f8a5b' : '#c97a17';
+function ExamsBlock({ subjectId, now }) {
+  const exams = window.EVENTS
+    .filter((e) => e.subjectId === subjectId && (e.kind === 'midterm' || e.kind === 'exam') && e.end >= now)
+    .sort((a, b) => a.start - b.start);
+  if (exams.length === 0) {
+    return (
+      <div className="sources-card">
+        <div style={{ padding: '14px 18px', color: 'var(--ink-muted-48)', fontSize: 14 }}>
+          No midterms or exams scheduled.
+        </div>
+      </div>
+    );
+  }
   return (
-    <div className="sources-card">
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, padding: '6px 0' }}>
-        <span style={{ color: 'var(--ink-muted-48)' }}>Last sync</span>
-        <span>{lastLabel}</span>
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, padding: '6px 0', borderTop: '1px solid var(--divider-soft)' }}>
-        <span style={{ color: 'var(--ink-muted-48)' }}>Items added (last run  -  7d)</span>
-        <span>{s.itemsAddedLastRun}  -  {s.itemsAddedLastWeek}</span>
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, padding: '6px 0', borderTop: '1px solid var(--divider-soft)' }}>
-        <span style={{ color: 'var(--ink-muted-48)' }}>Agent errors (7d)</span>
-        <span style={{ color: errColor }}>{s.agentErrorsLastWeek === 0 ? 'None' : s.agentErrorsLastWeek}</span>
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, padding: '6px 0', borderTop: '1px solid var(--divider-soft)' }}>
-        <span style={{ color: 'var(--ink-muted-48)' }}>Next run</span>
-        <span>{nextLabel}</span>
-      </div>
+    <div className="assignment-list">
+      {exams.map((e) => {
+        const isInstant = e.start.getTime() === e.end.getTime();
+        return (
+          <div key={e.itemId + e.start.toISOString()} className="assignment-row">
+            <div className="when">
+              <span className="day">{e.start.toLocaleDateString('en-US', { weekday: 'short', month: 'short' })}</span>
+              {e.start.getDate()}  -  {Util.fmtTimeShort(e.start)}
+            </div>
+            <div>
+              <div className="title">{e.summary.replace(/^(Lecture|Tutorial|Office hours)  -  /, '')}</div>
+              <div className="sub">{isInstant ? `Due${e.room ? `  -  ${e.room}` : ''}` : `${Util.fmtTime(e.start)} - ${Util.fmtTime(e.end)}${e.room ? `  -  ${e.room}` : ''}`}</div>
+            </div>
+            <div className={"kind " + e.kind}>{Util.kindLabel(e.kind)}</div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -598,10 +602,6 @@ function SubjectDetail({ id, now }) {
     .sort((a, b) => a.start - b.start);
   const upcoming = allItems.filter((e) => e.start >= Util.startOfWeek(now));
   const files = window.SUBJECT_FILES[s.id] || [];
-  const status = window.SYNC_STATUS;
-  const lastSync = status.lastRunISO
-    ? new Date(status.lastRunISO).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: false })
-    : 'never';
 
   return (
     <div data-screen-label={`Subject  -  ${s.code || s.id}`}>
@@ -625,10 +625,6 @@ function SubjectDetail({ id, now }) {
               {s.room && <span> {s.room}</span>}
               <span> <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12 }}>{s.destinationFolder}</span></span>
             </div>
-          </div>
-          <div className="right">
-            <div className="sync-pill"><span className="dot"></span>Synced {lastSync}</div>
-            <div style={{ fontSize: 12, color: 'var(--ink-muted-48)' }}>{allItems.length} items synced this term</div>
           </div>
         </div>
 
@@ -693,8 +689,9 @@ function SubjectDetail({ id, now }) {
             </div>
 
             <div className="sd-section">
-              <h2 style={{ fontSize: 21 }}>Pipeline</h2>
-              <PipelineBlock />
+              <h2 style={{ fontSize: 21 }}>Exams</h2>
+              <div className="sec-sub">Midterms and finals for this subject.</div>
+              <ExamsBlock subjectId={s.id} now={now} />
             </div>
           </div>
         </div>

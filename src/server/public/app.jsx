@@ -10,36 +10,12 @@ function App() {
   const { route, param } = useHashRoute();
   const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const [now, setNow] = useState(() => new Date());
-  const [, setTick] = useState(0);
-  const forceRender = () => setTick((n) => n + 1);
 
   useEffect(() => {
     if (!tweaks.liveClock) return;
     const id = setInterval(() => setNow(new Date()), 30 * 1000);
     return () => clearInterval(id);
   }, [tweaks.liveClock]);
-
-  // Poll /api/status every 30s. If the pipeline finished (lastRunISO advanced)
-  // since our last fetch, re-pull events and re-render.
-  useEffect(() => {
-    let cancelled = false;
-    let lastSeenRun = window.SYNC_STATUS.lastRunISO;
-    const id = setInterval(async () => {
-      try {
-        const status = await window.api.status();
-        if (cancelled) return;
-        window.SYNC_STATUS = status;
-        if (status.lastRunISO && status.lastRunISO !== lastSeenRun) {
-          lastSeenRun = status.lastRunISO;
-          await window.refreshData();
-        }
-        forceRender();
-      } catch (err) {
-        console.warn('status poll failed', err);
-      }
-    }, 30 * 1000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, []);
 
   let body;
   if (route === 'subjects' && param) {
