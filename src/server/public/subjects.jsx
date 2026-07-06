@@ -279,6 +279,20 @@ function SubjectForm({ initial, mode, onCancel, onSaved }) {
 
 const PREVIEWABLE_IMAGE = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg']);
 
+// Group files by their Canvas origin (module name / page title / folder),
+// preserving the server's course ordering. Consecutive-run grouping keeps
+// "Module 1, Module 2, ..." in the order Canvas presents them.
+function groupFilesBySource(files) {
+  const groups = [];
+  for (const f of files) {
+    const label = f.folderPath || 'Other files';
+    const last = groups[groups.length - 1];
+    if (last && last.label === label) last.items.push(f);
+    else groups.push({ label, items: [f] });
+  }
+  return groups;
+}
+
 // In-app file viewer: previews PDFs/images inline through a short-lived
 // storage URL; everything else gets a download-only card. The Download
 // button always fetches a fresh attachment-disposition URL.
@@ -607,6 +621,50 @@ function SubjectsPage({ now }) {
   );
 }
 
+// Everything with a deadline for this subject: assignments plus
+// midterms/exams, soonest first.
+function DueBlock({ subjectId, now }) {
+  const due = window.EVENTS
+    .filter((e) =>
+      e.subjectId === subjectId &&
+      (e.kind === 'assignment' || e.kind === 'midterm' || e.kind === 'exam') &&
+      e.end >= now)
+    .sort((a, b) => a.start - b.start);
+  if (due.length === 0) {
+    return (
+      <div className="sources-card">
+        <div style={{ padding: '14px 18px', color: 'var(--ink-muted-48)', fontSize: 14 }}>
+          Nothing due  -  all caught up.
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="assignment-list">
+      {due.map((e) => {
+        const isInstant = e.start.getTime() === e.end.getTime();
+        return (
+          <div key={e.itemId + e.start.toISOString()} className="assignment-row">
+            <div className="when">
+              <span className="day">{e.start.toLocaleDateString('en-US', { weekday: 'short', month: 'short' })}</span>
+              {e.start.getDate()}  -  {Util.fmtTimeShort(e.start)}
+            </div>
+            <div>
+              <div className="title">{e.summary.replace(/^(Lecture|Tutorial|Office hours)  -  /, '')}</div>
+              <div className="sub">
+                {Util.relTime(e.start, now)}
+                {isInstant ? `  -  due ${Util.fmtTime(e.start)}` : `  -  ${Util.fmtTime(e.start)} - ${Util.fmtTime(e.end)}`}
+                {e.room ? `  -  ${e.room}` : ''}
+              </div>
+            </div>
+            <div className={"kind " + e.kind}>{Util.kindLabel(e.kind)}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function ExamsBlock({ subjectId, now }) {
   const exams = window.EVENTS
     .filter((e) => e.subjectId === subjectId && (e.kind === 'midterm' || e.kind === 'exam') && e.end >= now)
@@ -769,34 +827,48 @@ function SubjectDetail({ id, now }) {
                   {syncingFiles ? 'Syncing...' : 'Sync files'}
                 </button>
               </div>
-              <div className="sec-sub">Mirrored from Canvas into cloud storage, in course order  -  click to view or download.</div>
-              <div className="files-list">
-                {files.length === 0 && <div style={{ padding: '14px 18px', color: 'var(--ink-muted-48)', fontSize: 14 }}>No files synced yet. Run a Canvas sync from the Subjects page.</div>}
-                {files.map((f) => (
-                  <div
-                    key={f.id ?? f.filename}
-                    className="file-row"
-                    style={{ cursor: 'pointer' }}
-                    title="View / download"
-                    onClick={() => setViewingFile(f)}
-                  >
-                    <span className="file-icon">{(f.filename.split('.').pop() || 'FILE').toUpperCase().slice(0, 4)}</span>
-                    <div className="name">
-                      {f.filename}
-                      <div className="meta">
-                        {f.folderPath ? `${f.folderPath}  -  ` : ''}
-                        Updated {f.addedISO ? new Date(f.addedISO).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ' - '}
-                      </div>
-                    </div>
-                    <div className="size">{f.size}</div>
+              <div className="sec-sub">Mirrored from Canvas into cloud storage, grouped by the module / page they came from  -  click to view or download.</div>
+              {files.length === 0 && (
+                <div className="files-list">
+                  <div style={{ padding: '14px 18px', color: 'var(--ink-muted-48)', fontSize: 14 }}>No files synced yet. Click "Sync files" above.</div>
+                </div>
+              )}
+              {groupFilesBySource(files).map((group) => (
+                <div key={group.label} style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.02em', textTransform: 'uppercase', color: 'var(--ink-muted-48)', margin: '12px 2px 6px' }}>
+                    {group.label}
                   </div>
-                ))}
-              </div>
+                  <div className="files-list">
+                    {group.items.map((f) => (
+                      <div
+                        key={f.id ?? f.filename}
+                        className="file-row"
+                        style={{ cursor: 'pointer' }}
+                        title="View / download"
+                        onClick={() => setViewingFile(f)}
+                      >
+                        <span className="file-icon">{(f.filename.split('.').pop() || 'FILE').toUpperCase().slice(0, 4)}</span>
+                        <div className="name">
+                          {f.filename}
+                          <div className="meta">Updated {f.addedISO ? new Date(f.addedISO).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ' - '}</div>
+                        </div>
+                        <div className="size">{f.size}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
 
           <div>
             <div className="sd-section" style={{ marginTop: 0 }}>
+              <h2 style={{ fontSize: 21 }}>Due</h2>
+              <div className="sec-sub">Assignments, midterms, and exams  -  everything with a deadline, soonest first.</div>
+              <DueBlock subjectId={s.id} now={now} />
+            </div>
+
+            <div className="sd-section">
               <h2 style={{ fontSize: 21 }}>Exams</h2>
               <div className="sec-sub">Midterms and finals for this subject.</div>
               <ExamsBlock subjectId={s.id} now={now} />

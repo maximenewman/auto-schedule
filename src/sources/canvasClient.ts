@@ -64,7 +64,14 @@ export interface CanvasModuleItem {
   id: number;
   type: string; // "File" | "Page" | "Assignment" | ...
   content_id?: number; // for type=File this is the file id
+  page_url?: string; // for type=Page this is the wiki slug
   title?: string;
+}
+
+export interface CanvasPage {
+  page_id: number;
+  url: string; // slug used to fetch the body
+  title: string;
 }
 
 export interface CanvasFile {
@@ -219,6 +226,30 @@ export class CanvasClient {
     try {
       const { data } = await this.get<CanvasFile>(`/courses/${courseId}/files/${fileId}`);
       return data;
+    } catch (err) {
+      if (err instanceof CanvasAuthError) throw err;
+      return null;
+    }
+  }
+
+  // Course wiki pages — profs embed file links in page bodies that never
+  // show up under Files or Modules.
+
+  async listPages(courseId: number): Promise<CanvasPage[]> {
+    try {
+      return await this.getAll<CanvasPage>(`/courses/${courseId}/pages`, new URLSearchParams());
+    } catch (err) {
+      if (err instanceof CanvasAuthError) throw err;
+      return []; // pages tab hidden/disabled
+    }
+  }
+
+  async getPageBody(courseId: number, pageUrl: string): Promise<string | null> {
+    try {
+      const { data } = await this.get<{ body?: string | null }>(
+        `/courses/${courseId}/pages/${encodeURIComponent(pageUrl)}`,
+      );
+      return data.body ?? null;
     } catch (err) {
       if (err instanceof CanvasAuthError) throw err;
       return null;

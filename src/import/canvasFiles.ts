@@ -34,6 +34,11 @@ export async function syncCourseFiles(opts: {
   let files = await opts.client.listCourseFiles(opts.courseId);
   const folderName = new Map<number, string>(); // fileId -> display folder
 
+  // Walk modules once regardless of Files-tab access: File items are the
+  // fallback listing when the tab is hidden, and Page items hold wiki pages
+  // that often exist even when the course's Pages index 404s.
+  const moduleWalk = await walkModules(opts.client, opts.courseId);
+
   if (files !== null) {
     const folders = await opts.client.listCourseFolders(opts.courseId);
     const folderById = new Map(folders.map((f) => [f.id, f.full_name]));
@@ -47,13 +52,27 @@ export async function syncCourseFiles(opts: {
       a.display_name.localeCompare(b.display_name),
     );
   } else {
-    // Files tab hidden (common at SFU) — recover files exposed via Modules.
-    // filesViaModules walks modules and items in Canvas position order, so
-    // the array index IS the Canvas ordering ("Week 1, Week 2, ...").
-    files = await filesViaModules(opts.client, opts.courseId, folderName);
+    // Files tab hidden (common at SFU) — recover files exposed via Modules,
+    // in Canvas position order ("Week 1, Week 2, ...").
+    files = await resolveModuleFiles(opts.client, opts.courseId, moduleWalk, folderName);
     logger.info(
       { courseId: opts.courseId, found: files.length },
       'canvas files: files tab hidden — using module items',
+    );
+  }
+
+  // Pages can embed file links that appear in neither Files nor Modules —
+  // scan the Pages index (when enabled) plus every page reachable from a
+  // module, and pick up whatever is new.
+  const seen = new Set(files.map((f) => f.id));
+  const pageFiles = await filesViaPages(
+    opts.client, opts.courseId, moduleWalk.pages, folderName, seen,
+  );
+  if (pageFiles.length > 0) {
+    files.push(...pageFiles);
+    logger.info(
+      { courseId: opts.courseId, found: pageFiles.length },
+      'canvas files: additional files found in pages',
     );
   }
 
@@ -123,24 +142,80 @@ function objectKey(userId: number, subjectId: string, fileId: number, name: stri
   return `u${userId}/${subjectId}/${fileId}/${safe}`;
 }
 
-/** Collect file objects reachable through module items, deduped by file id.
- *  The module's name doubles as the display folder. */
-async function filesViaModules(
-  client: CanvasClient,
-  courseId: number,
-  folderName: Map<number, string>,
-): Promise<CanvasFile[]> {
-  const out = new Map<number, CanvasFile>();
+interface ModuleWalk {
+  /** File items in module/item position order: [file id, module name]. */
+  fileItems: Array<[number, string]>;
+  /** Wiki pages reachable from modules: [page slug, page title]. */
+  pages: Array<[string, string]>;
+}
+
+/** One pass over modules + items, in Canvas position order. */
+async function walkModules(client: CanvasClient, courseId: number): Promise<ModuleWalk> {
+  const walk: ModuleWalk = { fileItems: [], pages: [] };
   const modules = await client.listModules(courseId);
   for (const mod of modules) {
     const items = await client.listModuleItems(courseId, mod.id);
     for (const item of items) {
-      if (item.type !== 'File' || !item.content_id || out.has(item.content_id)) continue;
-      const file = await client.getCourseFile(courseId, item.content_id);
-      if (!file) continue; // locked or otherwise inaccessible
-      out.set(file.id, file);
-      folderName.set(file.id, mod.name);
+      if (item.type === 'File' && item.content_id) {
+        walk.fileItems.push([item.content_id, mod.name]);
+      } else if (item.type === 'Page' && item.page_url) {
+        walk.pages.push([item.page_url, item.title ?? mod.name]);
+      }
     }
   }
+  return walk;
+}
+
+/** Resolve module File items into file objects, deduped by file id. The
+ *  module's name doubles as the display folder. */
+async function resolveModuleFiles(
+  client: CanvasClient,
+  courseId: number,
+  walk: ModuleWalk,
+  folderName: Map<number, string>,
+): Promise<CanvasFile[]> {
+  const out = new Map<number, CanvasFile>();
+  for (const [fileId, modName] of walk.fileItems) {
+    if (out.has(fileId)) continue;
+    const file = await client.getCourseFile(courseId, fileId);
+    if (!file) continue; // locked or otherwise inaccessible
+    out.set(file.id, file);
+    folderName.set(file.id, modName);
+  }
   return [...out.values()];
+}
+
+/** Scan wiki pages for embedded file links ("/courses/:id/files/123" or
+ *  "/files/123") and resolve any not already collected. Covers both the
+ *  Pages index (when enabled) and pages reachable only through modules —
+ *  many courses 404 the index yet still publish module pages. The page
+ *  title doubles as the display folder. */
+async function filesViaPages(
+  client: CanvasClient,
+  courseId: number,
+  modulePages: Array<[string, string]>,
+  folderName: Map<number, string>,
+  seen: Set<number>,
+): Promise<CanvasFile[]> {
+  const out: CanvasFile[] = [];
+  const pageSlugs = new Map<string, string>(modulePages);
+  for (const page of await client.listPages(courseId)) {
+    if (!pageSlugs.has(page.url)) pageSlugs.set(page.url, page.title);
+  }
+
+  const linkRe = new RegExp(`(?:/courses/${courseId})?/files/(\\d+)`, 'g');
+  for (const [slug, title] of pageSlugs) {
+    const body = await client.getPageBody(courseId, slug);
+    if (!body) continue;
+    for (const m of body.matchAll(linkRe)) {
+      const fileId = Number(m[1]);
+      if (!Number.isInteger(fileId) || seen.has(fileId)) continue;
+      seen.add(fileId);
+      const file = await client.getCourseFile(courseId, fileId);
+      if (!file) continue; // cross-course link or locked
+      out.push(file);
+      folderName.set(file.id, title);
+    }
+  }
+  return out;
 }
