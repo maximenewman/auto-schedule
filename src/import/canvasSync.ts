@@ -13,6 +13,7 @@ import {
   type CanvasCalendarEvent,
   type CanvasCourse,
 } from '../sources/canvasClient.js';
+import { classifyKind } from '../sync/classify.js';
 import { logger } from '../logger.js';
 
 export type CanvasProgress =
@@ -322,7 +323,7 @@ function toCalendarEvent(ev: CanvasCalendarEvent, subject: Subject): CalendarEve
   const end = ev.end_at ?? ev.start_at;
   return {
     itemId: `canvas-event-${ev.id}`,
-    kind: kindFromTitle(ev.title),
+    kind: classifyKind(ev.title),
     summary: ev.title,
     description: [stripHtml(ev.description), ev.html_url].filter(Boolean).join('\n'),
     room: ev.location_name ?? null,
@@ -330,17 +331,6 @@ function toCalendarEvent(ev: CanvasCalendarEvent, subject: Subject): CalendarEve
     endDateTime: end,
     attachments: [],
   };
-}
-
-function kindFromTitle(title: string): EventKind {
-  const t = title.toLowerCase();
-  if (t.includes('midterm')) return 'midterm';
-  if (t.includes('final') || t.includes('exam') || t.includes('quiz')) return 'exam';
-  if (t.includes('office hour')) return 'office-hours';
-  if (t.includes('tutorial')) return 'tutorial';
-  if (t.includes('lab')) return 'lab';
-  if (t.includes('lecture')) return 'lecture';
-  return 'other';
 }
 
 function stripHtml(html: string | null | undefined): string {

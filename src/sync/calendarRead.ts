@@ -4,6 +4,7 @@ import type { CalendarItemRow } from '../state/store.js';
 import type { StateStore } from '../state/store.js';
 import { loadSubjects } from '../config/subjectsStore.js';
 import type { Subject } from '../config/subjects.js';
+import { classifyKind } from './classify.js';
 import { logger } from '../logger.js';
 
 const CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID ?? 'primary';
@@ -132,7 +133,9 @@ export async function listGoogleEvents(
       }
       subjectId = guessed.id;
       itemId = ev.id;
-      kind = 'other';
+      // Events that exist only on Google (user-created, or synced before the
+      // local cache existed) still get a real kind from their title.
+      kind = classifyKind(ev.summary);
       sourceLabel = 'google';
       lastSyncedAt = new Date().toISOString();
       viaSummary++;

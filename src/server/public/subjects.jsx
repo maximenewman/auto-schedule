@@ -52,33 +52,40 @@ async function importFromCanvas() {
 
 function statusPills() {
   const s = window.SYNC_STATUS;
+  const confirmDisconnect = () => {
+    if (window.confirm('Disconnect Google Calendar? Events stay in the app; they just stop syncing to Google.')) {
+      disconnectGoogle();
+    }
+  };
   return (
     <div style={{ display: 'flex', gap: 10 }}>
       {s.canvasConfigured ? (
-        <div className="sync-pill" title="Click to sync courses, announcements, and events from Canvas"
-             style={{ cursor: 'pointer' }} onClick={importFromCanvas}>
+        <button type="button" className="sync-pill" onClick={importFromCanvas}
+                title="Pull courses, announcements, events, and files from Canvas">
           <span className="dot"></span>
-          Canvas connected  -  sync now
-        </div>
+          Canvas connected
+          <span className="action">Sync now</span>
+        </button>
       ) : (
-        <div className="sync-pill" title="Paste a Canvas access token to auto-import your courses"
-             style={{ cursor: 'pointer' }} onClick={setCanvasToken}>
+        <button type="button" className="sync-pill" onClick={setCanvasToken}
+                title="Paste a Canvas access token to auto-import your courses">
           <span className="dot warn"></span>
-          Add Canvas token
-        </div>
+          <span className="action">Add Canvas token</span>
+        </button>
       )}
       {s.googleAuthOk ? (
-        <div className="sync-pill" title="Events sync to your Google Calendar. Click to disconnect."
-             style={{ cursor: 'pointer' }} onClick={disconnectGoogle}>
+        <button type="button" className="sync-pill" onClick={confirmDisconnect}
+                title="Events sync to your Google Calendar">
           <span className="dot"></span>
-          Google Calendar connected
-        </div>
+          Google Calendar on
+          <span className="action">Disconnect</span>
+        </button>
       ) : (
-        <div className="sync-pill" title="Optional: mirror your schedule into Google Calendar"
-             style={{ cursor: 'pointer' }} onClick={connectGoogle}>
-          <span className="dot"></span>
-          Connect Google Calendar
-        </div>
+        <button type="button" className="sync-pill" onClick={connectGoogle}
+                title="Optional: mirror your schedule into Google Calendar">
+          <span className="dot warn"></span>
+          <span className="action">Connect Google Calendar</span>
+        </button>
       )}
     </div>
   );
@@ -638,7 +645,27 @@ function ExamsBlock({ subjectId, now }) {
 function SubjectDetail({ id, now }) {
   const [editing, setEditing] = useState(false);
   const [viewingFile, setViewingFile] = useState(null);
+  const [syncingFiles, setSyncingFiles] = useState(false);
+  const [, forceRender] = useState(0);
   const s = Util.subjectById(id);
+
+  const syncFiles = useCallback(async () => {
+    if (syncingFiles) return;
+    setSyncingFiles(true);
+    try {
+      const res = await fetch(`/api/subjects/${encodeURIComponent(id)}/files/sync`, { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(body.error || 'File sync failed.');
+        return;
+      }
+      const rows = await window.api.files(id);
+      window.SUBJECT_FILES[id] = (Array.isArray(rows) ? rows : []).map(window.hydrateFile);
+      forceRender((n) => n + 1);
+    } finally {
+      setSyncingFiles(false);
+    }
+  }, [id, syncingFiles]);
 
   const handleDelete = useCallback(async () => {
     if (!s) return;
@@ -730,8 +757,19 @@ function SubjectDetail({ id, now }) {
             </div>
 
             <div className="sd-section">
-              <h2>Files</h2>
-              <div className="sec-sub">Mirrored from Canvas into cloud storage  -  click to open or download.</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <h2 style={{ flex: 1 }}>Files</h2>
+                <button
+                  type="button"
+                  className="btn-ghost-pill"
+                  onClick={syncFiles}
+                  disabled={syncingFiles}
+                  title="Pull this course's files from Canvas"
+                >
+                  {syncingFiles ? 'Syncing...' : 'Sync files'}
+                </button>
+              </div>
+              <div className="sec-sub">Mirrored from Canvas into cloud storage, in course order  -  click to view or download.</div>
               <div className="files-list">
                 {files.length === 0 && <div style={{ padding: '14px 18px', color: 'var(--ink-muted-48)', fontSize: 14 }}>No files synced yet. Run a Canvas sync from the Subjects page.</div>}
                 {files.map((f) => (

@@ -41,8 +41,15 @@ export async function syncCourseFiles(opts: {
       const name = folderById.get(f.folder_id);
       if (name) folderName.set(f.id, name);
     }
+    // Files-tab path: mimic the course page's folder ordering.
+    files.sort((a, b) =>
+      (folderName.get(a.id) ?? '').localeCompare(folderName.get(b.id) ?? '') ||
+      a.display_name.localeCompare(b.display_name),
+    );
   } else {
     // Files tab hidden (common at SFU) — recover files exposed via Modules.
+    // filesViaModules walks modules and items in Canvas position order, so
+    // the array index IS the Canvas ordering ("Week 1, Week 2, ...").
     files = await filesViaModules(opts.client, opts.courseId, folderName);
     logger.info(
       { courseId: opts.courseId, found: files.length },
@@ -50,7 +57,9 @@ export async function syncCourseFiles(opts: {
     );
   }
 
+  let order = 0;
   for (const file of files) {
+    const sortOrder = order++;
     if (file.size > MAX_BYTES) {
       logger.warn(
         { filename: file.display_name, size: file.size },
@@ -68,6 +77,8 @@ export async function syncCourseFiles(opts: {
         canvasUpdated &&
         existing.canvasUpdatedAt.getTime() >= canvasUpdated.getTime()
       ) {
+        // Content unchanged, but keep the ordering in step with Canvas.
+        await opts.store.setFileSortOrder(file.id, sortOrder, opts.userId);
         result.skipped++;
         continue;
       }
@@ -90,6 +101,7 @@ export async function syncCourseFiles(opts: {
           size: file.size ?? null,
           folderPath: folderName.get(file.id) ?? null,
           canvasUpdatedAt: canvasUpdated,
+          sortOrder,
         },
         opts.userId,
       );

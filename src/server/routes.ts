@@ -360,6 +360,36 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
     }));
   });
 
+  // One-subject file sync — the "Sync files" button on the subject page.
+  app.post('/api/subjects/:id/files/sync', async (req, reply) => {
+    const userId = req.userId!;
+    const { id } = req.params as { id: string };
+    if (!(await findSubject(ctx.store, id, userId))) {
+      return reply.code(404).send({ error: 'not found' });
+    }
+    const courseId = await ctx.store.getCanvasCourseIdForSubject(id, userId);
+    if (courseId === null) {
+      return reply.code(400).send({ error: 'subject is not linked to a Canvas course' });
+    }
+    const token = await ctx.store.getCanvasToken(userId);
+    if (!token) {
+      return reply.code(400).send({ error: 'no Canvas token configured' });
+    }
+    const client = new CanvasClient(token.token, token.baseUrl);
+    try {
+      const result = await syncCourseFiles({
+        client, courseId, subjectId: id, store: ctx.store, userId,
+      });
+      return result;
+    } catch (err) {
+      if (err instanceof CanvasAuthError) {
+        return reply.code(401).send({ error: 'Canvas rejected the token — paste a new one' });
+      }
+      logger.error({ err, subjectId: id }, 'files: subject sync failed');
+      return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
   app.get('/api/files/:id/url', async (req, reply) => {
     const userId = req.userId!;
     const { id } = req.params as { id: string };

@@ -619,8 +619,67 @@ function ImportSfuButton() {
   );
 }
 
+// Detail card for a clicked calendar event.
+function EventDetails({ event, onClose }) {
+  React.useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const subj = Util.subjectById(event.subjectId);
+  const isInstant = event.start.getTime() === event.end.getTime();
+  const sameDay = Util.sameDay(event.start, event.end);
+  const dateLine = event.start.toLocaleDateString('en-US', {
+    weekday: 'long', month: 'long', day: 'numeric',
+  });
+  const timeLine = isInstant
+    ? `Due at ${Util.fmtTime(event.start)}`
+    : sameDay
+      ? `${Util.fmtTime(event.start)} - ${Util.fmtTime(event.end)}`
+      : `${Util.fmtTime(event.start)} -> ${event.end.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ${Util.fmtTime(event.end)}`;
+
+  const row = (label, value) => value ? (
+    <div className="ed-row">
+      <div className="ed-label">{label}</div>
+      <div className="ed-value">{value}</div>
+    </div>
+  ) : null;
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal event-details" onClick={(e) => e.stopPropagation()}>
+        <header>
+          {subj && <span className="ed-dot" style={{ background: subj.color }}></span>}
+          <h2>{event.summary}</h2>
+          <button type="button" className="close" onClick={onClose} aria-label="Close">x</button>
+        </header>
+        <div className="ed-body">
+          {row('Subject', subj ? `${subj.code || subj.id}${subj.name && subj.name !== subj.code ? `  -  ${subj.name}` : ''}` : event.subjectId)}
+          {row('Type', <span className="ed-kind">{Util.kindLabel(event.kind)}</span>)}
+          {row('Date', dateLine)}
+          {row('Time', timeLine)}
+          {row('Room', event.room)}
+          {row('Source', event.sourceLabel)}
+          {event.description && <div className="ed-description">{event.description}</div>}
+          {event.attachments && event.attachments.length > 0 && (
+            <div className="ed-attachments">
+              {event.attachments.map((a, i) => (
+                <a key={i} href={a.url} target="_blank" rel="noopener noreferrer">
+                  {a.filename || a.url}
+                </a>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SchedulePage({ now, tweaks }) {
   const [weekStart, setWeekStart] = useState(() => Util.startOfWeek(now));
+  const [selectedEvent, setSelectedEvent] = useState(null);
   const weekEnd = Util.addDays(weekStart, 6);
 
   const heroVariant = tweaks.hero || 'hero';
@@ -650,7 +709,7 @@ function SchedulePage({ now, tweaks }) {
               <button className="nav-btn" onClick={() => setWeekStart(Util.addDays(weekStart, 7))} aria-label="Next week">{'>'}</button>
             </div>
           </div>
-          <WeekGrid weekStart={weekStart} now={now} />
+          <WeekGrid weekStart={weekStart} now={now} onEventClick={setSelectedEvent} />
         </section>
         <aside className="side-rail">
           {heroVariant === 'hero' && <NowHero now={now} />}
@@ -660,6 +719,7 @@ function SchedulePage({ now, tweaks }) {
           <Deadlines now={now} />
         </aside>
       </div>
+      {selectedEvent && <EventDetails event={selectedEvent} onClose={() => setSelectedEvent(null)} />}
     </div>
   );
 }
