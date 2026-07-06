@@ -653,15 +653,24 @@ function SubjectDetail({ id, now }) {
 
             <div className="sd-section">
               <h2>Files</h2>
-              <div className="sec-sub">Synced to <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 13 }}>{s.destinationFolder}</span>  -  de-duplicated by SHA-256.</div>
+              <div className="sec-sub">Mirrored from Canvas into cloud storage  -  click to open or download.</div>
               <div className="files-list">
-                {files.length === 0 && <div style={{ padding: '14px 18px', color: 'var(--ink-muted-48)', fontSize: 14 }}>No files downloaded yet.</div>}
+                {files.length === 0 && <div style={{ padding: '14px 18px', color: 'var(--ink-muted-48)', fontSize: 14 }}>No files synced yet. Run a Canvas sync from the Subjects page.</div>}
                 {files.map((f) => (
-                  <div key={f.filename} className="file-row">
+                  <div
+                    key={f.id ?? f.filename}
+                    className="file-row"
+                    style={{ cursor: 'pointer' }}
+                    title="Open / download"
+                    onClick={() => window.openStoredFile(f.id)}
+                  >
                     <span className="file-icon">{(f.filename.split('.').pop() || 'FILE').toUpperCase().slice(0, 4)}</span>
                     <div className="name">
                       {f.filename}
-                      <div className="meta">Added {f.addedISO ? new Date(f.addedISO).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ' - '}</div>
+                      <div className="meta">
+                        {f.folderPath ? `${f.folderPath}  -  ` : ''}
+                        Updated {f.addedISO ? new Date(f.addedISO).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ' - '}
+                      </div>
                     </div>
                     <div className="size">{f.size}</div>
                   </div>

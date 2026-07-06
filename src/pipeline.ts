@@ -3,6 +3,7 @@ import type { StateStore } from './state/store.js';
 import { runFullIcalSync, ICAL_URL_SETTING } from './import/icalSync.js';
 import { syncAtomSubscription, ATOM_URL_SETTING } from './import/atomSync.js';
 import { syncCanvas } from './import/canvasSync.js';
+import { syncCourseFiles } from './import/canvasFiles.js';
 import { extractPendingAnnouncements } from './import/announcementExtract.js';
 import { logger } from './logger.js';
 
@@ -49,6 +50,7 @@ export async function runPipeline(ctx: RunContext): Promise<RunSummary> {
         store: ctx.store,
         userId: ctx.userId,
         googleAuth: ctx.googleAuth,
+        fileSink: (o) => syncCourseFiles({ ...o, store: ctx.store }),
       });
       summary.canvasEventsWritten = r.eventsWritten;
       summary.announcementsFetched += r.announcementsFetched;

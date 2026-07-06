@@ -54,11 +54,8 @@ const api = {
     const q = params.toString();
     return fetchJson(`/api/subjects/${id}/events${q ? '?' + q : ''}`, undefined, []);
   },
-  // `/api/subjects/:id/files` was retired in the multi-user refactor — the
-  // dashboard's file counts now come from a future object-storage backend.
-  // Keep the helper around so existing callers don't crash, but always
-  // resolve to an empty list.
-  files:       (_id)   => Promise.resolve([]),
+  files:       (id)    => fetchJson(`/api/subjects/${encodeURIComponent(id)}/files`, undefined, []),
+  fileUrl:     (id)    => fetchJson(`/api/files/${encodeURIComponent(id)}/url`),
   status:      ()      => fetchJson('/api/status', undefined, window.SYNC_STATUS),
   sync:        ()      => fetchJson('/api/sync', { method: 'POST' }, { started: false }),
 };
@@ -90,12 +87,20 @@ function hydrateFile(row) {
     else                        size = row.size + ' B';
   }
   return {
+    id: row.id,
     filename: row.filename,
     size,
     addedISO: row.addedISO,
-    path: row.path,
+    folderPath: row.folderPath || '',
   };
 }
+
+/** Open a stored file in a new tab via a short-lived presigned URL. */
+window.openStoredFile = async function openStoredFile(fileId) {
+  const res = await api.fileUrl(fileId);
+  if (res && res.url) window.open(res.url, '_blank', 'noopener');
+  else alert('Could not get a download link — is object storage configured?');
+};
 
 function toArray(x) { return Array.isArray(x) ? x : []; }
 

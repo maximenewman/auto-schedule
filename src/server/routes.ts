@@ -50,7 +50,9 @@ import {
 } from '../auth/google.js';
 import { CanvasClient, CanvasAuthError } from '../sources/canvasClient.js';
 import { syncCanvas, type CanvasProgress } from '../import/canvasSync.js';
+import { syncCourseFiles } from '../import/canvasFiles.js';
 import { extractPendingAnnouncements } from '../import/announcementExtract.js';
+import { presignGetUrl } from '../files/storage.js';
 import { randomBytes } from 'node:crypto';
 
 declare module 'fastify' {
@@ -301,7 +303,15 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
       raw.write(JSON.stringify(evt) + '\n');
     };
     try {
-      await syncCanvas({ store: ctx.store, userId, googleAuth: auth }, emit);
+      await syncCanvas(
+        {
+          store: ctx.store,
+          userId,
+          googleAuth: auth,
+          fileSink: (o) => syncCourseFiles({ ...o, store: ctx.store }),
+        },
+        emit,
+      );
       // Follow straight into the LLM pass so freshly-imported announcements
       // become events in the same click.
       const extract = await extractPendingAnnouncements({
@@ -325,6 +335,47 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
     const userId = req.userId!;
     const auth = await getAuth(userId);
     return extractPendingAnnouncements({ store: ctx.store, userId, googleAuth: auth });
+  });
+
+  // ---- files (Canvas -> object storage) ----------------------------------
+
+  app.get('/api/subjects/:id/files', async (req, reply) => {
+    const userId = req.userId!;
+    const { id } = req.params as { id: string };
+    if (!(await findSubject(ctx.store, id, userId))) {
+      return reply.code(404).send({ error: 'not found' });
+    }
+    const rows = await ctx.store.listFiles({ subjectId: id }, userId);
+    return rows.map((f) => ({
+      id: f.canvasFileId,
+      filename: f.filename,
+      size: f.size,
+      contentType: f.contentType,
+      folderPath: f.folderPath,
+      addedISO: f.canvasUpdatedAt
+        ? f.canvasUpdatedAt.toISOString()
+        : typeof f.createdAt === 'string'
+          ? f.createdAt
+          : f.createdAt.toISOString(),
+    }));
+  });
+
+  app.get('/api/files/:id/url', async (req, reply) => {
+    const userId = req.userId!;
+    const { id } = req.params as { id: string };
+    const canvasFileId = Number(id);
+    if (!Number.isInteger(canvasFileId)) {
+      return reply.code(400).send({ error: 'bad file id' });
+    }
+    const row = await ctx.store.getFileRecord(canvasFileId, userId);
+    if (!row) return reply.code(404).send({ error: 'not found' });
+    try {
+      const url = await presignGetUrl(row.objectKey, 300);
+      return { url, filename: row.filename };
+    } catch (err) {
+      logger.error({ err }, 'files: presign failed');
+      return reply.code(503).send({ error: 'object storage not configured' });
+    }
   });
 
   // Per-user OAuth2Client cache. googleapis handles access-token refresh
@@ -370,6 +421,7 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
     const now = new Date().toISOString();
     const subjects = await loadSubjects(ctx.store, userId);
     const events = await readEvents(userId, { fromISO: now });
+    const allFiles = await ctx.store.listFiles({}, userId);
     return subjects.map((s) => {
       const subjectEvents = events.filter((e) => e.subjectId === s.id);
       const upcomingDeadlines = subjectEvents.filter(
@@ -379,10 +431,7 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
         ...serializeSubject(s),
         counts: {
           upcomingDeadlines: upcomingDeadlines.length,
-          // `files` left at 0 so existing dashboard widgets keep rendering;
-          // attachment downloads return in a later phase backed by object
-          // storage rather than a local folder.
-          files: 0,
+          files: allFiles.filter((f) => f.subjectId === s.id).length,
         },
       };
     });

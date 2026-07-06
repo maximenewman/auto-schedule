@@ -55,6 +55,18 @@ export interface CanvasFolder {
   full_name: string; // "course files/lectures"
 }
 
+export interface CanvasModule {
+  id: number;
+  name: string;
+}
+
+export interface CanvasModuleItem {
+  id: number;
+  type: string; // "File" | "Page" | "Assignment" | ...
+  content_id?: number; // for type=File this is the file id
+  title?: string;
+}
+
 export interface CanvasFile {
   id: number;
   folder_id: number;
@@ -174,6 +186,42 @@ export class CanvasClient {
     } catch (err) {
       if (err instanceof CanvasAuthError) throw err;
       return [];
+    }
+  }
+
+  // Many courses hide the Files tab (403) but still distribute files through
+  // Modules — walking module items of type "File" recovers them.
+
+  async listModules(courseId: number): Promise<CanvasModule[]> {
+    try {
+      return await this.getAll<CanvasModule>(`/courses/${courseId}/modules`, new URLSearchParams());
+    } catch (err) {
+      if (err instanceof CanvasAuthError) throw err;
+      return [];
+    }
+  }
+
+  async listModuleItems(courseId: number, moduleId: number): Promise<CanvasModuleItem[]> {
+    try {
+      return await this.getAll<CanvasModuleItem>(
+        `/courses/${courseId}/modules/${moduleId}/items`,
+        new URLSearchParams(),
+      );
+    } catch (err) {
+      if (err instanceof CanvasAuthError) throw err;
+      return [];
+    }
+  }
+
+  /** Single file by id (works for module-visible files even when the Files
+   *  tab is hidden). Locked/inaccessible files return null. */
+  async getCourseFile(courseId: number, fileId: number): Promise<CanvasFile | null> {
+    try {
+      const { data } = await this.get<CanvasFile>(`/courses/${courseId}/files/${fileId}`);
+      return data;
+    } catch (err) {
+      if (err instanceof CanvasAuthError) throw err;
+      return null;
     }
   }
 }

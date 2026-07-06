@@ -700,6 +700,86 @@ export class Store {
     return (result.count ?? 0) > 0;
   }
 
+  // ---- Canvas files mirrored to object storage ---------------------------
+
+  async getFileRecord(
+    canvasFileId: number,
+    userId: number = DEFAULT_USER_ID,
+  ): Promise<FileRecordRow | null> {
+    const rows = await this.sql<FileRecordRow[]>`
+      SELECT
+        canvas_file_id    AS "canvasFileId",
+        subject_id        AS "subjectId",
+        object_key        AS "objectKey",
+        filename          AS "filename",
+        content_type      AS "contentType",
+        size              AS "size",
+        folder_path       AS "folderPath",
+        canvas_updated_at AS "canvasUpdatedAt",
+        created_at        AS "createdAt"
+      FROM files
+      WHERE user_id = ${userId} AND canvas_file_id = ${canvasFileId}
+    `;
+    return rows[0] ?? null;
+  }
+
+  async upsertFileRecord(
+    row: {
+      canvasFileId: number;
+      subjectId: string | null;
+      objectKey: string;
+      filename: string;
+      contentType: string | null;
+      size: number | null;
+      folderPath: string | null;
+      canvasUpdatedAt: Date | null;
+    },
+    userId: number = DEFAULT_USER_ID,
+  ): Promise<void> {
+    await this.sql`
+      INSERT INTO files (
+        user_id, canvas_file_id, subject_id, object_key, filename,
+        content_type, size, folder_path, canvas_updated_at, created_at, updated_at
+      ) VALUES (
+        ${userId}, ${row.canvasFileId}, ${row.subjectId}, ${row.objectKey},
+        ${row.filename}, ${row.contentType}, ${row.size}, ${row.folderPath},
+        ${row.canvasUpdatedAt}, now(), now()
+      )
+      ON CONFLICT (user_id, canvas_file_id) DO UPDATE SET
+        subject_id        = EXCLUDED.subject_id,
+        object_key        = EXCLUDED.object_key,
+        filename          = EXCLUDED.filename,
+        content_type      = EXCLUDED.content_type,
+        size              = EXCLUDED.size,
+        folder_path       = EXCLUDED.folder_path,
+        canvas_updated_at = EXCLUDED.canvas_updated_at,
+        updated_at        = now()
+    `;
+  }
+
+  async listFiles(
+    opts: { subjectId?: string } = {},
+    userId: number = DEFAULT_USER_ID,
+  ): Promise<FileRecordRow[]> {
+    const sql = this.sql;
+    return sql<FileRecordRow[]>`
+      SELECT
+        canvas_file_id    AS "canvasFileId",
+        subject_id        AS "subjectId",
+        object_key        AS "objectKey",
+        filename          AS "filename",
+        content_type      AS "contentType",
+        size              AS "size",
+        folder_path       AS "folderPath",
+        canvas_updated_at AS "canvasUpdatedAt",
+        created_at        AS "createdAt"
+      FROM files
+      WHERE user_id = ${userId}
+        ${opts.subjectId ? sql`AND subject_id = ${opts.subjectId}` : sql``}
+      ORDER BY folder_path NULLS FIRST, filename ASC
+    `;
+  }
+
   // ---- users -----------------------------------------------------------
 
   /**
@@ -838,6 +918,18 @@ export interface GoogleTokenRow {
   accessToken: string | null;
   accessTokenExpires: Date | null;
   scope: string | null;
+}
+
+export interface FileRecordRow {
+  canvasFileId: number;
+  subjectId: string | null;
+  objectKey: string;
+  filename: string;
+  contentType: string | null;
+  size: number | null;
+  folderPath: string | null;
+  canvasUpdatedAt: Date | null;
+  createdAt: Date | string;
 }
 
 interface SubjectDbRow {
