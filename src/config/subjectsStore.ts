@@ -22,7 +22,6 @@ export const SubjectSchema = z.object({
     .string()
     .regex(/^#[0-9a-fA-F]{6}$/, 'color must be a #rrggbb hex string')
     .optional(),
-  destinationFolder: z.string().min(1),
 });
 
 export async function loadSubjects(

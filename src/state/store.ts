@@ -185,8 +185,7 @@ export class Store {
   ): Promise<Subject | undefined> {
     const rows = await this.sql<SubjectDbRow[]>`
       SELECT
-        id, code, name, professor, room, section, term, color,
-        destination_folder AS "destinationFolder", sources
+        id, code, name, professor, room, section, term, color
       FROM subjects
       WHERE user_id = ${userId} AND canvas_course_id = ${canvasCourseId}
     `;
@@ -625,8 +624,7 @@ export class Store {
         room,
         section,
         term,
-        color,
-        destination_folder AS "destinationFolder"
+        color
       FROM subjects
       WHERE user_id = ${userId}
       ORDER BY name ASC
@@ -647,8 +645,7 @@ export class Store {
         room,
         section,
         term,
-        color,
-        destination_folder AS "destinationFolder"
+        color
       FROM subjects
       WHERE user_id = ${userId} AND id = ${id}
     `;
@@ -660,18 +657,15 @@ export class Store {
     userId: number = DEFAULT_USER_ID,
   ): Promise<{ ok: true } | { ok: false; reason: 'duplicate' }> {
     try {
-      // `sources` column survives until the cleanup migration drops it;
-      // write an empty array to satisfy any NOT NULL constraint.
       await this.sql`
         INSERT INTO subjects (
           user_id, id, code, name, professor, room, section, term, color,
-          destination_folder, sources, created_at, updated_at
+          created_at, updated_at
         ) VALUES (
           ${userId}, ${subject.id}, ${subject.code ?? null}, ${subject.name},
           ${subject.professor}, ${subject.room ?? null},
           ${subject.section ?? null}, ${subject.term ?? null},
-          ${subject.color ?? null}, ${subject.destinationFolder},
-          ${this.sql.json([])}, now(), now()
+          ${subject.color ?? null}, now(), now()
         )
       `;
       return { ok: true };
@@ -695,7 +689,6 @@ export class Store {
         section = ${subject.section ?? null},
         term = ${subject.term ?? null},
         color = ${subject.color ?? null},
-        destination_folder = ${subject.destinationFolder},
         updated_at = now()
       WHERE user_id = ${userId} AND id = ${subject.id}
     `;
@@ -969,7 +962,6 @@ interface SubjectDbRow {
   section: string | null;
   term: string | null;
   color: string | null;
-  destinationFolder: string;
 }
 
 function rowToSubject(row: SubjectDbRow): Subject {
@@ -977,7 +969,6 @@ function rowToSubject(row: SubjectDbRow): Subject {
     id: row.id,
     name: row.name,
     professor: row.professor,
-    destinationFolder: row.destinationFolder,
   };
   if (row.code !== null) out.code = row.code;
   if (row.room !== null) out.room = row.room;

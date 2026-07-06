@@ -18,7 +18,6 @@ export interface Subject {
    * absent the client derives one deterministically from `id`.
    */
   color?: string;
-  destinationFolder: string;
 }
 
 export const SUBJECT_PALETTE = [

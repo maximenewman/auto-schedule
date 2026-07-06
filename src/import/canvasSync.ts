@@ -281,7 +281,6 @@ async function resolveSubject(
     code,
     name: course.name || code,
     professor: 'TBD',
-    destinationFolder: `downloads/${code}`,
   };
   if (course.term?.name && !/default/i.test(course.term.name)) {
     subject.term = course.term.name;

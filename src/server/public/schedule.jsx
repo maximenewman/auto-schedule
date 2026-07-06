@@ -527,18 +527,10 @@ function ImportSfuButton() {
 
   const handleFile = async (file) => {
     close();
-    const baseFolder = window.prompt(
-      'Base folder for class file downloads (subjects will be created as <base>/<COURSE CODE>):',
-      window.localStorage.getItem('sfuImportBaseFolder') || 'downloads',
-    );
-    if (baseFolder == null) return;
-    window.localStorage.setItem('sfuImportBaseFolder', baseFolder);
-
     setBusy(true);
     try {
       const fd = new FormData();
       fd.append('pdf', file, file.name);
-      fd.append('baseFolder', baseFolder);
       const res = await fetch('/api/import/sfu', { method: 'POST', body: fd });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
@@ -619,6 +611,19 @@ function ImportSfuButton() {
   );
 }
 
+// SFU Room Finder deep link. Query is just the room code — building letters
+// glued to the number ("AQ 3181" -> AQ3181, "SSCC 9001, Burnaby Campus" ->
+// SSCC9001); Room Finder's search snaps to the code, extra words break it.
+function roomFinderUrl(room) {
+  const s = String(room);
+  const m = /([A-Za-z]{1,6})\s*-?\s*(\d{3,5}(?:\.\d+)?)/.exec(s);
+  const q = m
+    ? `${m[1]}${m[2]}`.toUpperCase()
+    : s.split(',')[0].replace(/\s+/g, '').toUpperCase();
+  return 'https://roomfinder.sfu.ca/apps/sfuroomfinder_web/?q=' + encodeURIComponent(q);
+}
+window.roomFinderUrl = roomFinderUrl;
+
 // Detail card for a clicked calendar event.
 function EventDetails({ event, onClose }) {
   React.useEffect(() => {
@@ -659,7 +664,12 @@ function EventDetails({ event, onClose }) {
           {row('Type', <span className="ed-kind">{Util.kindLabel(event.kind)}</span>)}
           {row('Date', dateLine)}
           {row('Time', timeLine)}
-          {row('Room', event.room)}
+          {row('Room', event.room && (
+            <a href={roomFinderUrl(event.room)} target="_blank" rel="noopener noreferrer"
+               title="Open in SFU Room Finder">
+              {event.room} {'↗'}
+            </a>
+          ))}
           {row('Source', event.sourceLabel)}
           {event.description && <div className="ed-description">{event.description}</div>}
           {event.attachments && event.attachments.length > 0 && (

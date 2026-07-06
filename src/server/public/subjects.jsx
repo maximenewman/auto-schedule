@@ -101,7 +101,6 @@ function emptySubject() {
     section: '',
     term: '',
     color: COLOR_OPTIONS[0],
-    destinationFolder: '',
   };
 }
 
@@ -110,7 +109,6 @@ function normalizeSubjectForApi(s) {
     id: s.id.trim(),
     name: s.name.trim(),
     professor: (s.professor || '').trim(),
-    destinationFolder: s.destinationFolder.trim(),
   };
   if (s.code && s.code.trim()) out.code = s.code.trim();
   if (s.room && s.room.trim()) out.room = s.room.trim();
@@ -250,17 +248,6 @@ function SubjectForm({ initial, mode, onCancel, onSaved }) {
                   />
                 ))}
               </div>
-            </label>
-            <label className="span-2">
-              <span>Destination folder</span>
-              <input
-                type="text"
-                value={form.destinationFolder}
-                onChange={(e) => update({ destinationFolder: e.target.value })}
-                required
-                placeholder="D:/Desktop/University/Summer 2026/CMPT 307"
-                style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 13 }}
-              />
             </label>
           </div>
 
@@ -552,8 +539,7 @@ function SubjectsPage({ now }) {
           <div>
             <h1>Your classes</h1>
             <div className="sub">
-              {visibleSubjects.length} subjects  -  stored in{' '}
-              <code style={{ background: 'var(--parchment)', padding: '2px 6px', borderRadius: 4, fontSize: 14 }}>data/subjects.json</code>
+              {visibleSubjects.length} subjects  -  synced from Canvas and CourSys
             </div>
           </div>
           {statusPills()}
@@ -661,6 +647,52 @@ function DueBlock({ subjectId, now }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// Latest announcements for one subject, with a link to the filtered
+// announcements page.
+function AnnouncementsBlock({ subjectId }) {
+  const [items, setItems] = React.useState(null);
+
+  React.useEffect(() => {
+    let alive = true;
+    window.api.announcements(subjectId, 5).then((rows) => {
+      if (alive) setItems(Array.isArray(rows) ? rows : []);
+    });
+    return () => { alive = false; };
+  }, [subjectId]);
+
+  if (items === null) {
+    return <div className="sources-card"><div style={{ padding: '14px 18px', color: 'var(--ink-muted-48)', fontSize: 14 }}>Loading...</div></div>;
+  }
+  if (items.length === 0) {
+    return <div className="sources-card"><div style={{ padding: '14px 18px', color: 'var(--ink-muted-48)', fontSize: 14 }}>No announcements for this subject yet.</div></div>;
+  }
+  return (
+    <div className="sources-card">
+      {items.map((a) => (
+        <a
+          key={a.entryId}
+          href={`#/announcements/${encodeURIComponent(subjectId)}`}
+          style={{ display: 'block', padding: '10px 16px', borderTop: '1px solid var(--divider-soft)', textDecoration: 'none' }}
+        >
+          <div style={{ fontSize: 14, color: 'var(--ink)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {a.title}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--ink-muted-48)', marginTop: 2 }}>
+            {a.publishedAt ? new Date(a.publishedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''}
+            {a.author ? `  -  ${a.author}` : ''}
+          </div>
+        </a>
+      ))}
+      <a
+        href={`#/announcements/${encodeURIComponent(subjectId)}`}
+        style={{ display: 'block', padding: '10px 16px', borderTop: '1px solid var(--divider-soft)', fontSize: 13 }}
+      >
+        View all announcements {'->'}
+      </a>
     </div>
   );
 }
@@ -781,10 +813,14 @@ function SubjectDetail({ id, now }) {
             <div className="code-tag"><span className="swatch" style={{ background: s.color }}></span>{s.code || s.id}{s.section ? ` ${s.section}` : ''}{s.term ? `  -  ${s.term}` : ''}</div>
             <h1>{s.name}</h1>
             <div className="prof">{s.professor}</div>
-            <div style={{ marginTop: 12, display: 'flex', gap: 18, color: 'var(--ink-muted-80)', fontSize: 14, flexWrap: 'wrap' }}>
-              {s.room && <span> {s.room}</span>}
-              <span> <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12 }}>{s.destinationFolder}</span></span>
-            </div>
+            {s.room && (
+              <div style={{ marginTop: 12, fontSize: 14 }}>
+                <a href={window.roomFinderUrl(s.room)} target="_blank" rel="noopener noreferrer"
+                   title="Open in SFU Room Finder">
+                  {s.room} {'↗'}
+                </a>
+              </div>
+            )}
           </div>
         </div>
 
@@ -858,6 +894,12 @@ function SubjectDetail({ id, now }) {
                   </div>
                 </div>
               ))}
+            </div>
+
+            <div className="sd-section">
+              <h2>Announcements</h2>
+              <div className="sec-sub">Latest posts from Canvas and CourSys for this subject.</div>
+              <AnnouncementsBlock subjectId={s.id} />
             </div>
           </div>
 

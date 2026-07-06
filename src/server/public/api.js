@@ -55,6 +55,13 @@ const api = {
     return fetchJson(`/api/subjects/${id}/events${q ? '?' + q : ''}`, undefined, []);
   },
   files:       (id)    => fetchJson(`/api/subjects/${encodeURIComponent(id)}/files`, undefined, []),
+  announcements: (subjectId, limit) => {
+    const params = new URLSearchParams();
+    if (subjectId) params.set('subjectId', subjectId);
+    if (limit)     params.set('limit', String(limit));
+    const q = params.toString();
+    return fetchJson(`/api/announcements${q ? '?' + q : ''}`, undefined, []);
+  },
   fileUrl:     (id, disposition) =>
     fetchJson(`/api/files/${encodeURIComponent(id)}/url?disposition=${disposition || 'inline'}`),
   status:      ()      => fetchJson('/api/status', undefined, window.SYNC_STATUS),

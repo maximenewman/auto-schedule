@@ -37,11 +37,6 @@ function subjectIdFor(course: SfuCourse): string {
   return `${course.subject}${course.number}`.toLowerCase();
 }
 
-function destinationFolderFor(baseFolder: string, course: SfuCourse): string {
-  const base = baseFolder.replace(/[\\/]+$/, '').replace(/\\/g, '/');
-  return `${base}/${course.code}`;
-}
-
 /** Pick the primary instructor for a course: the first non-"Staff" name on a
  *  LEC section, falling back to whatever's on the first section. */
 function primaryInstructor(course: SfuCourse): string {
@@ -212,12 +207,10 @@ function mergeSubject(existing: Subject, next: Subject): Subject {
     section: existing.section ?? next.section,
     term: existing.term ?? next.term,
     color: existing.color ?? next.color,
-    destinationFolder: existing.destinationFolder || next.destinationFolder,
   };
 }
 
 export interface BootstrapOptions {
-  baseFolder: string;
   /** null = user has no Google Calendar connected; local rows only. */
   googleAuth: OAuth2Client | null;
   store: StateStore;
@@ -259,7 +252,6 @@ export async function bootstrapFromSchedule(
       name: course.title || course.code,
       professor: primaryInstructor(course),
       term,
-      destinationFolder: destinationFolderFor(opts.baseFolder, course),
     };
     if (lecSection) next.section = lecSection;
 

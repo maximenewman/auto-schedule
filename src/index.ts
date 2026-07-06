@@ -44,33 +44,14 @@ function parseCommand(argv: string[]): Command {
 
 interface ImportArgs {
   pdfPath: string;
-  baseFolder: string;
 }
 
 function parseImportArgs(argv: string[]): ImportArgs {
-  const args = argv.slice(3);
-  let pdfPath: string | undefined;
-  let baseFolder: string | undefined;
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i]!;
-    if (a === '--base-folder') {
-      baseFolder = args[++i];
-    } else if (a.startsWith('--base-folder=')) {
-      baseFolder = a.slice('--base-folder='.length);
-    } else if (!pdfPath) {
-      pdfPath = a;
-    }
-  }
+  const pdfPath = argv.slice(3).find((a) => !a.startsWith('--'));
   if (!pdfPath) {
-    throw new Error('usage: import:sfu <path-to-pdf> [--base-folder <path>]');
+    throw new Error('usage: import:sfu <path-to-pdf>');
   }
-  return {
-    pdfPath: resolve(pdfPath),
-    baseFolder:
-      baseFolder ??
-      process.env.AUTO_SCHEDULE_BASE_FOLDER ??
-      'downloads',
-  };
+  return { pdfPath: resolve(pdfPath) };
 }
 
 async function maybeJitter(command: Command): Promise<void> {
@@ -162,7 +143,6 @@ async function main(): Promise<void> {
           pdf: args.pdfPath,
           term: schedule.term.label,
           courses: schedule.courses.length,
-          baseFolder: args.baseFolder,
         },
         'parsed SFU schedule',
       );
@@ -170,7 +150,6 @@ async function main(): Promise<void> {
       try {
         const googleAuth = await optionalGoogleAuth(store, userId);
         const result = await bootstrapFromSchedule(schedule, {
-          baseFolder: args.baseFolder,
           googleAuth,
           store,
           userId,

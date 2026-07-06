@@ -68,7 +68,6 @@ export interface IcalSyncOptions {
   googleAuth: OAuth2Client | null;
   store: StateStore;
   userId?: number;
-  baseFolder?: string;
 }
 
 export interface IcalSyncResult {
@@ -164,7 +163,6 @@ export async function syncIcalSubscription(
   onProgress?.({ stage: 'fetch', status: 'done', fetched: events.length });
   onProgress?.({ stage: 'upsert', status: 'start', total: events.length });
 
-  const baseFolder = opts.baseFolder ?? 'downloads';
   // Lookup index for subjects. Keys are *normalised*  -  case-folded, no
   // spaces  -  so that "CMPT 307", "cmpt307", "CMPT307" all hit the same row.
   // This is what stops a PDF-bootstrap subject (id "cmpt307") from being
@@ -211,7 +209,7 @@ export async function syncIcalSubscription(
     if (isHoliday(ev)) {
       subject = subjectCache.get(normalizeCode(HOLIDAYS_SUBJECT_ID));
       if (!subject) {
-        subject = await autoCreateHolidaysSubject(opts.store, baseFolder, opts.userId);
+        subject = await autoCreateHolidaysSubject(opts.store, opts.userId);
         subjectCache.set(normalizeCode(subject.id), subject);
         result.subjectsCreated++;
       }
@@ -256,7 +254,7 @@ export async function syncIcalSubscription(
           : null;
         const initialTerm = termFromUid(ev.uid);
         subject = await autoCreateSubject(
-          opts.store, code, baseFolder, opts.userId, initialSection, initialTerm,
+          opts.store, code, opts.userId, initialSection, initialTerm,
         );
         subjectCache.set(normalizeCode(subject.id), subject);
         subjectCache.set(normalizeCode(code), subject);
@@ -574,19 +572,16 @@ function termFromUid(uid: string): string | null {
 async function autoCreateSubject(
   store: Store,
   code: string,
-  baseFolder: string,
   userId?: number,
   section?: string | null,
   term?: string | null,
 ): Promise<Subject> {
   const id = code.replace(/\s+/g, '').toLowerCase();
-  const base = baseFolder.replace(/[\\/]+$/, '').replace(/\\/g, '/');
   const subject: Subject = {
     id,
     code,
     name: code,
     professor: 'TBD',
-    destinationFolder: `${base}/${code}`,
   };
   if (section) subject.section = section;
   if (term) subject.term = term;
@@ -608,12 +603,10 @@ async function autoCreateSubject(
 
 async function autoCreateHolidaysSubject(
   store: Store,
-  baseFolder: string,
   userId?: number,
 ): Promise<Subject> {
   const existing = await findSubject(store, HOLIDAYS_SUBJECT_ID, userId);
   if (existing) return existing;
-  const base = baseFolder.replace(/[\\/]+$/, '').replace(/\\/g, '/');
   const subject: Subject = {
     id: HOLIDAYS_SUBJECT_ID,
     code: 'Holidays',
@@ -621,7 +614,6 @@ async function autoCreateHolidaysSubject(
     professor: '',
     term: '',
     color: '#c97a17',
-    destinationFolder: `${base}/Holidays`,
   };
   try {
     await createSubject(store, subject, userId);

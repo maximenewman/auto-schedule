@@ -87,7 +87,6 @@ function serializeSubject(s: Subject) {
     room: s.room ?? null,
     section: s.section ?? null,
     color: colorForSubject(s),
-    destinationFolder: s.destinationFolder,
   };
 }
 
@@ -797,26 +796,19 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
     }
     let pdfBuf: Buffer | null = null;
     let pdfName: string | null = null;
-    let baseFolder: string | null = null;
     for await (const part of req.parts()) {
       if (part.type === 'file' && part.fieldname === 'pdf') {
         pdfBuf = await part.toBuffer();
         pdfName = part.filename ?? 'schedule.pdf';
-      } else if (part.type === 'field' && part.fieldname === 'baseFolder') {
-        baseFolder = String(part.value ?? '').trim();
       }
     }
     if (!pdfBuf) {
       return reply.code(400).send({ error: 'missing "pdf" file in form' });
     }
-    if (!baseFolder) {
-      baseFolder = process.env.AUTO_SCHEDULE_BASE_FOLDER ?? 'downloads';
-    }
     try {
       const schedule = await parseSchedulePdf(pdfBuf);
       const googleAuth = await getAuth(userId);
       const result = await bootstrapFromSchedule(schedule, {
-        baseFolder,
         googleAuth,
         store: ctx.store,
         userId,
