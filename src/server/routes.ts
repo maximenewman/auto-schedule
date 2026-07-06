@@ -19,7 +19,7 @@ import {
 import {
   countRecentAgentErrors,
   googleAuthExists,
-  coursysCookieAge,
+  canvasTokenStatus,
   type SyncStatus,
 } from './status.js';
 import { parseSchedulePdf } from '../import/sfuPdf.js';
@@ -31,7 +31,9 @@ import { planDedup } from '../import/dedupAgent.js';
 import { deleteSubjectAndCalendar } from '../import/reconcile.js';
 import { getAuthorizedClient } from '../auth/google.js';
 import { listGoogleEvents } from '../sync/calendarRead.js';
+import { listLocalEvents } from '../sync/localRead.js';
 import type { OAuth2Client } from 'google-auth-library';
+import { getAuth as getClerkAuth, clerkClient } from '@clerk/fastify';
 import { logger } from '../logger.js';
 import {
   handleVerifyHandshake,
@@ -46,14 +48,9 @@ import {
   buildGoogleAuthUrl,
   exchangeCodeForTokens,
 } from '../auth/google.js';
-import { isValidCookie } from '../auth/coursys.js';
-import {
-  SESSION_COOKIE,
-  cookieOptions,
-  endSession,
-  resolveSession,
-  startSession,
-} from '../auth/sessions.js';
+import { CanvasClient, CanvasAuthError } from '../sources/canvasClient.js';
+import { syncCanvas, type CanvasProgress } from '../import/canvasSync.js';
+import { extractPendingAnnouncements } from '../import/announcementExtract.js';
 import { randomBytes } from 'node:crypto';
 
 declare module 'fastify' {
@@ -62,7 +59,7 @@ declare module 'fastify' {
   }
 }
 
-const OAUTH_STATE_COOKIE = 'as_oauth_state';
+const OAUTH_STATE_SETTING = 'google.oauth_state';
 
 interface RouteCtx {
   store: StateStore;
@@ -89,7 +86,6 @@ function serializeSubject(s: Subject) {
     section: s.section ?? null,
     color: colorForSubject(s),
     destinationFolder: s.destinationFolder,
-    sources: s.sources,
   };
 }
 
@@ -107,18 +103,43 @@ function isProtectedPath(url: string): boolean {
 }
 
 export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
-  // Session resolution: every request gets a chance to attach req.userId.
-  // Protected routes 401 when it's still undefined after this hook runs.
+  // Clerk resolution: map the request's Clerk user onto a local users row and
+  // attach req.userId. Cached per process — findOrCreateUserByClerkId only
+  // runs on the first request of a given Clerk user.
+  const localIdByClerkId = new Map<string, number>();
   app.addHook('preHandler', async (req, reply) => {
-    const cookie = req.cookies?.[SESSION_COOKIE];
-    if (cookie) {
-      const unsigned = req.unsignCookie(cookie);
-      if (unsigned.valid && unsigned.value) {
-        const userId = await resolveSession(ctx.store, unsigned.value);
-        if (userId !== null) {
-          req.userId = userId;
+    const auth = getClerkAuth(req);
+    if (auth.userId) {
+      let localId = localIdByClerkId.get(auth.userId);
+      if (localId === undefined) {
+        try {
+          const cu = await clerkClient.users.getUser(auth.userId);
+          const email =
+            cu.primaryEmailAddress?.emailAddress ??
+            cu.emailAddresses[0]?.emailAddress ??
+            null;
+          if (email) {
+            const displayName =
+              [cu.firstName, cu.lastName].filter(Boolean).join(' ') || null;
+            const user = await ctx.store.findOrCreateUserByClerkId({
+              clerkUserId: auth.userId,
+              email,
+              displayName,
+            });
+            localId = user.id;
+            localIdByClerkId.set(auth.userId, localId);
+            logger.info(
+              { userId: localId, clerkUserId: auth.userId, email },
+              'auth: clerk user resolved',
+            );
+          } else {
+            logger.error({ clerkUserId: auth.userId }, 'auth: clerk user has no email');
+          }
+        } catch (err) {
+          logger.error({ err, clerkUserId: auth.userId }, 'auth: clerk resolution failed');
         }
       }
+      if (localId !== undefined) req.userId = localId;
     }
     if (req.userId === undefined && isProtectedPath(req.url)) {
       return reply.code(401).send({ error: 'not authenticated' });
@@ -127,64 +148,11 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
 
   // ---- auth flow -------------------------------------------------------
 
-  app.get('/auth/google/start', async (_req, reply) => {
-    const state = randomBytes(16).toString('base64url');
-    reply.setCookie(OAUTH_STATE_COOKIE, state, {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production',
-      path: '/auth/google/callback',
-      maxAge: 600,
-      signed: true,
-    });
-    return reply.redirect(buildGoogleAuthUrl(state));
-  });
-
-  app.get('/auth/google/callback', async (req, reply) => {
-    const q = req.query as { code?: string; state?: string; error?: string };
-    if (q.error) {
-      return reply.code(400).send({ error: `google: ${q.error}` });
-    }
-    if (!q.code || !q.state) {
-      return reply.code(400).send({ error: 'missing code or state' });
-    }
-    const signedState = req.cookies?.[OAUTH_STATE_COOKIE];
-    if (!signedState) {
-      return reply.code(400).send({ error: 'oauth state cookie missing' });
-    }
-    const unsigned = req.unsignCookie(signedState);
-    if (!unsigned.valid || unsigned.value !== q.state) {
-      return reply.code(400).send({ error: 'oauth state mismatch' });
-    }
-    reply.clearCookie(OAUTH_STATE_COOKIE, { path: '/auth/google/callback' });
-
-    let result;
-    try {
-      result = await exchangeCodeForTokens(q.code);
-    } catch (err) {
-      logger.error({ err }, 'auth: token exchange failed');
-      return reply.code(500).send({ error: 'token exchange failed' });
-    }
-
-    const user = await ctx.store.findOrCreateUserByGoogleSub({
-      sub: result.profile.sub,
-      email: result.profile.email,
-      displayName: result.profile.name,
-    });
-    await ctx.store.saveGoogleTokens(user.id, {
-      refreshToken: result.credentials.refresh_token ?? null,
-      accessToken: result.credentials.access_token ?? null,
-      accessTokenExpires: result.credentials.expiry_date
-        ? new Date(result.credentials.expiry_date)
-        : null,
-      scope: result.credentials.scope ?? null,
-    });
-
-    const { sessionId, expiresAt } = await startSession(ctx.store, user.id);
-    reply.setCookie(SESSION_COOKIE, sessionId, cookieOptions(expiresAt));
-    logger.info({ userId: user.id, email: user.email }, 'auth: signed in');
-    return reply.redirect('/');
-  });
+  // Public: the SPA fetches the publishable key here before loading clerk-js
+  // (no bundler, so the key can't be inlined at build time).
+  app.get('/auth/config', async () => ({
+    clerkPublishableKey: process.env.CLERK_PUBLISHABLE_KEY ?? null,
+  }));
 
   app.get('/auth/me', async (req, reply) => {
     if (req.userId === undefined) {
@@ -202,59 +170,161 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
     };
   });
 
-  // ---- CourSys cookie upload ------------------------------------------
+  // ---- optional Google Calendar connect ---------------------------------
+  //
+  // Requested via authed fetch (not top-level navigation) so the Clerk Bearer
+  // token identifies the user. The random state token is persisted in
+  // user_settings (state -> userId) rather than a cookie: the redirect back
+  // from Google may land on a different host alias (localhost vs 127.0.0.1),
+  // where a cookie set on the app origin would silently not be sent.
 
-  app.get('/api/coursys/cookies', async (req) => {
+  app.get('/api/google/start-url', async (req) => {
     const userId = req.userId!;
-    const row = await ctx.store.getCourSysCookies(userId);
-    if (!row) return { configured: false, count: 0, updatedAt: null };
+    const state = randomBytes(16).toString('base64url');
+    await ctx.store.setSetting(OAUTH_STATE_SETTING, state, userId);
+    return { url: buildGoogleAuthUrl(state) };
+  });
+
+  app.get('/auth/google/callback', async (req, reply) => {
+    const q = req.query as { code?: string; state?: string; error?: string };
+    if (q.error) {
+      return reply.code(400).send({ error: `google: ${q.error}` });
+    }
+    if (!q.code || !q.state) {
+      return reply.code(400).send({ error: 'missing code or state' });
+    }
+    const userId = await ctx.store.consumeSettingByValue(OAUTH_STATE_SETTING, q.state);
+    if (userId === null) {
+      return reply.code(400).send({
+        error: 'oauth state unknown or already used — restart the connect flow from the app',
+      });
+    }
+
+    let credentials;
+    try {
+      credentials = await exchangeCodeForTokens(q.code);
+    } catch (err) {
+      logger.error({ err }, 'auth: token exchange failed');
+      return reply.code(500).send({ error: 'token exchange failed' });
+    }
+
+    await ctx.store.saveGoogleTokens(userId, {
+      refreshToken: credentials.refresh_token ?? null,
+      accessToken: credentials.access_token ?? null,
+      accessTokenExpires: credentials.expiry_date
+        ? new Date(credentials.expiry_date)
+        : null,
+      scope: credentials.scope ?? null,
+    });
+    authCache.delete(userId);
+    logger.info({ userId }, 'auth: google calendar connected');
+    return reply.redirect('/');
+  });
+
+  app.post('/api/google/disconnect', async (req) => {
+    const userId = req.userId!;
+    await ctx.store.clearGoogleTokens(userId);
+    authCache.delete(userId);
+    logger.info({ userId }, 'auth: google calendar disconnected');
+    return { connected: false };
+  });
+
+  // ---- Canvas token ------------------------------------------------------
+
+  app.get('/api/canvas/token', async (req) => {
+    const userId = req.userId!;
+    const row = await ctx.store.getCanvasToken(userId);
+    if (!row) return { configured: false, baseUrl: null, updatedAt: null };
+    // Never echo the token itself.
     return {
-      configured: row.cookies.length > 0,
-      count: row.cookies.length,
+      configured: true,
+      baseUrl: row.baseUrl,
       updatedAt: row.updatedAt ? row.updatedAt.toISOString() : null,
     };
   });
 
-  app.post('/api/coursys/cookies', async (req, reply) => {
+  app.post('/api/canvas/token', async (req, reply) => {
     const userId = req.userId!;
-    const body = req.body as { consent?: unknown; cookies?: unknown };
-    if (body.consent !== true) {
-      return reply.code(400).send({
-        error:
-          'consent required — confirm you understand the app uses these cookies to act on your CourSys session',
-      });
+    const body = req.body as { token?: unknown; baseUrl?: unknown };
+    const token = typeof body.token === 'string' ? body.token.trim() : '';
+    if (!token) {
+      return reply.code(400).send({ error: 'token is required' });
     }
-    if (!Array.isArray(body.cookies)) {
-      return reply.code(400).send({ error: 'cookies must be an array' });
+    let baseUrl: string | undefined;
+    if (typeof body.baseUrl === 'string' && body.baseUrl.trim() !== '') {
+      try {
+        const u = new URL(body.baseUrl.trim());
+        if (u.protocol !== 'https:') {
+          return reply.code(400).send({ error: 'baseUrl must be https' });
+        }
+        baseUrl = u.origin;
+      } catch {
+        return reply.code(400).send({ error: 'invalid baseUrl' });
+      }
     }
-    const valid = body.cookies.filter(isValidCookie);
-    if (valid.length === 0) {
-      return reply.code(400).send({
-        error:
-          'no usable cookies in payload — expected objects with name + value strings',
-      });
+    // Validate before saving so a bad paste fails loudly here, not at 2am.
+    try {
+      const who = await new CanvasClient(token, baseUrl).whoAmI();
+      await ctx.store.saveCanvasToken(userId, token, baseUrl);
+      logger.info({ userId, canvasUser: who.name }, 'canvas: token saved');
+      return { configured: true, canvasUser: who.name };
+    } catch (err) {
+      if (err instanceof CanvasAuthError) {
+        return reply.code(400).send({ error: 'Canvas rejected the token — double-check it' });
+      }
+      logger.error({ err }, 'canvas: token validation failed');
+      return reply.code(502).send({ error: 'could not reach Canvas to validate the token' });
     }
-    await ctx.store.saveCourSysCookies(userId, valid);
-    logger.info({ userId, count: valid.length }, 'coursys: cookies uploaded');
-    return { configured: true, count: valid.length };
   });
 
-  app.delete('/api/coursys/cookies', async (req) => {
+  app.delete('/api/canvas/token', async (req) => {
     const userId = req.userId!;
-    await ctx.store.clearCourSysCookies(userId);
+    await ctx.store.clearCanvasToken(userId);
     return { configured: false };
   });
 
-  app.post('/auth/logout', async (req, reply) => {
-    const cookie = req.cookies?.[SESSION_COOKIE];
-    if (cookie) {
-      const unsigned = req.unsignCookie(cookie);
-      if (unsigned.valid && unsigned.value) {
-        await endSession(ctx.store, unsigned.value);
-      }
+  app.post('/api/import/canvas', async (req, reply) => {
+    const userId = req.userId!;
+    const token = await ctx.store.getCanvasToken(userId);
+    if (!token) {
+      return reply.code(400).send({ error: 'no Canvas token configured' });
     }
-    reply.clearCookie(SESSION_COOKIE, { path: '/' });
-    return { ok: true };
+    const auth = await getAuth(userId);
+    reply.hijack();
+    const raw = reply.raw;
+    raw.writeHead(200, {
+      'content-type': 'application/x-ndjson',
+      'cache-control': 'no-cache',
+      'x-accel-buffering': 'no',
+    });
+    const emit = (evt: CanvasProgress) => {
+      raw.write(JSON.stringify(evt) + '\n');
+    };
+    try {
+      await syncCanvas({ store: ctx.store, userId, googleAuth: auth }, emit);
+      // Follow straight into the LLM pass so freshly-imported announcements
+      // become events in the same click.
+      const extract = await extractPendingAnnouncements({
+        store: ctx.store, userId, googleAuth: auth,
+      });
+      raw.write(JSON.stringify({ stage: 'extract', status: 'done', ...extract }) + '\n');
+    } catch (err) {
+      logger.error({ err }, 'import:canvas failed');
+      const message = err instanceof Error ? err.message : String(err);
+      try {
+        raw.write(JSON.stringify({ stage: 'error', message } satisfies CanvasProgress) + '\n');
+      } catch {
+        /* response may already be closed */
+      }
+    } finally {
+      raw.end();
+    }
+  });
+
+  app.post('/api/announcements/extract', async (req) => {
+    const userId = req.userId!;
+    const auth = await getAuth(userId);
+    return extractPendingAnnouncements({ store: ctx.store, userId, googleAuth: auth });
   });
 
   // Per-user OAuth2Client cache. googleapis handles access-token refresh
@@ -278,11 +348,19 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
     opts: { fromISO?: string; toISO?: string; subjectId?: string },
   ) {
     const auth = await getAuth(userId);
-    if (!auth) return [];
+    if (auth) {
+      try {
+        return await listGoogleEvents(auth, ctx.store, { ...opts, userId });
+      } catch (err) {
+        logger.error({ err, userId }, 'google calendar read failed — falling back to local');
+      }
+    }
+    // No Google connected (or the read failed): serve the schedule from the
+    // local calendar_items cache, expanding recurrences ourselves.
     try {
-      return await listGoogleEvents(auth, ctx.store, { ...opts, userId });
+      return await listLocalEvents(ctx.store, { ...opts, userId });
     } catch (err) {
-      logger.error({ err, userId }, 'google calendar read failed');
+      logger.error({ err, userId }, 'local calendar read failed');
       return [];
     }
   }
@@ -305,7 +383,6 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
           // attachment downloads return in a later phase backed by object
           // storage rather than a local folder.
           files: 0,
-          sources: s.sources.length,
         },
       };
     });
@@ -411,9 +488,9 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
             e.lastSyncedAt <= lastRun.finishedAt,
         ).length
       : 0;
-    const cookie = await safe('coursysCookieAge', () =>
-      coursysCookieAge(ctx.store, userId),
-      { ok: false, expiresInDays: null });
+    const canvas = await safe('canvasTokenStatus', () =>
+      canvasTokenStatus(ctx.store, userId),
+      { configured: false, updatedAt: null });
     const googleOk = await safe('googleAuthExists', () =>
       googleAuthExists(ctx.store, userId), false);
 
@@ -424,8 +501,8 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
       itemsAddedLastWeek: itemsLastWeek,
       agentErrorsLastWeek: countRecentAgentErrors(),
       googleAuthOk: googleOk,
-      coursysAuthOk: cookie.ok,
-      coursysExpiresInDays: cookie.expiresInDays,
+      canvasConfigured: canvas.configured,
+      canvasTokenUpdatedAt: canvas.updatedAt,
       running: ctx.runState.current,
       lastRun: ctx.runState.lastRun,
     };
@@ -434,11 +511,9 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
   app.get('/api/subjects/dedup', async (req, reply) => {
     const userId = req.userId!;
     // Ask the LLM for a dedup plan. Returned as-is so the UI can preview
-    // what would be merged before the user confirms.
+    // what would be merged before the user confirms. Works without Google —
+    // the plan is drawn from local rows and merges stay local-only.
     const auth = await getAuth(userId);
-    if (!auth) {
-      return reply.code(503).send({ error: 'google auth not set up' });
-    }
     try {
       const { plan } = await planDedup({ store: ctx.store, googleAuth: auth, userId });
       return plan;
@@ -459,9 +534,6 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
       eventMerges?: Array<{ canonicalEventId?: unknown; redundantEventIds?: unknown }>;
     };
     const auth = await getAuth(userId);
-    if (!auth) {
-      return reply.code(503).send({ error: 'google auth not set up' });
-    }
 
     let subjectMerges = (body.subjectMerges ?? []) as Array<{ fromId: string; intoId: string }>;
     let eventMerges = (body.eventMerges ?? []) as Array<{ canonicalEventId: string; redundantEventIds: string[] }>;
@@ -481,7 +553,8 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
       try {
         const r = await mergeSubject({
           fromId: m.fromId, intoId: m.intoId,
-          store: ctx.store, googleAuth: auth, deleteGoogleEvents: true, userId,
+          store: ctx.store, googleAuth: auth ?? undefined,
+          deleteGoogleEvents: auth !== null, userId,
         });
         summary.subjectMerges++;
         summary.googleEventsDeleted += r.googleEventsDeleted;
@@ -537,10 +610,8 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
     if (!url) {
       return reply.code(400).send({ error: 'no iCal URL configured' });
     }
+    // Google is optional — with no client the sync writes local rows only.
     const auth = await getAuth(userId);
-    if (!auth) {
-      return reply.code(503).send({ error: 'google auth not set up' });
-    }
     // Stream NDJSON so the dashboard can render a real progress bar
     // through fetch + ReadableStream. Bypasses Fastify's serialiser via
     // hijack()  -  we own the response from here on.
@@ -658,7 +729,7 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
     }
     try {
       const schedule = await parseSchedulePdf(pdfBuf);
-      const googleAuth = await getAuthorizedClient(ctx.store, userId);
+      const googleAuth = await getAuth(userId);
       const result = await bootstrapFromSchedule(schedule, {
         baseFolder,
         googleAuth,

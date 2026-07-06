@@ -162,15 +162,21 @@ function buildPatch(
   return { patch, reasons, protectStructural };
 }
 
-export async function upsertEvent(
-  auth: OAuth2Client,
+export type WriteAction = 'inserted' | 'updated' | 'noop' | 'local';
+
+/**
+ * Write an event to the local store and — when the user has Google Calendar
+ * connected — to Google. With `auth: null` only the local rows are written,
+ * which is what keeps the in-app schedule working for Google-less users.
+ */
+export async function writeEvent(
+  auth: OAuth2Client | null,
   subjectId: string,
   event: CalendarEvent,
   store?: StateStore,
   sourceLabel?: string,
   userId?: number,
-): Promise<{ eventId: string; action: 'inserted' | 'updated' | 'noop' }> {
-  const calendar = google.calendar({ version: 'v3', auth });
+): Promise<{ eventId: string; action: WriteAction }> {
   // The dedup agent records a redirect when it merges two events that came
   // from different sources (e.g. an iCal D1 lecture into a PDF LEC). Re-run
   // syncs honour that redirect so the same merge doesn't have to happen
@@ -184,6 +190,12 @@ export async function upsertEvent(
     await store.recordSyncedEvent(eventId, subjectId, event.itemId, userId);
     await store.upsertCalendarItem(eventId, subjectId, event, sourceLabel ?? null, userId);
   };
+
+  if (!auth) {
+    await recordLocal();
+    return { eventId, action: 'local' };
+  }
+  const calendar = google.calendar({ version: 'v3', auth });
 
   let existing: calendar_v3.Schema$Event | null = null;
   try {
@@ -269,4 +281,16 @@ export async function upsertEvent(
     'calendar patched',
   );
   return { eventId, action: 'updated' };
+}
+
+/** Back-compat wrapper for callers that always have Google connected. */
+export async function upsertEvent(
+  auth: OAuth2Client,
+  subjectId: string,
+  event: CalendarEvent,
+  store?: StateStore,
+  sourceLabel?: string,
+  userId?: number,
+): Promise<{ eventId: string; action: WriteAction }> {
+  return writeEvent(auth, subjectId, event, store, sourceLabel, userId);
 }

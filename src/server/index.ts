@@ -4,6 +4,7 @@ import fastifyStatic from '@fastify/static';
 import fastifyMultipart from '@fastify/multipart';
 import fastifyCookie from '@fastify/cookie';
 import fastifyCors from '@fastify/cors';
+import { clerkPlugin } from '@clerk/fastify';
 import { resolve, dirname } from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -40,6 +41,8 @@ async function main(): Promise<void> {
     limits: { fileSize: 10 * 1024 * 1024, files: 1 },
   });
 
+  // Clerk owns sign-in; the cookie plugin stays only to sign the short-lived
+  // Google OAuth state cookie used by the "Connect Google Calendar" flow.
   const cookieSecret = process.env.SESSION_SECRET;
   if (!cookieSecret) {
     throw new Error(
@@ -47,6 +50,13 @@ async function main(): Promise<void> {
     );
   }
   await app.register(fastifyCookie, { secret: cookieSecret });
+
+  if (!process.env.CLERK_PUBLISHABLE_KEY || !process.env.CLERK_SECRET_KEY) {
+    throw new Error('CLERK_PUBLISHABLE_KEY / CLERK_SECRET_KEY are not set — see .env.example');
+  }
+  // Populates per-request auth state (it never rejects requests itself);
+  // the routes' preHandler maps Clerk users onto local user rows.
+  await app.register(clerkPlugin);
 
   // The companion browser extension POSTs cookies from
   // chrome-extension://<id>. Allow that origin (plus the dev UI origin) with

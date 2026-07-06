@@ -28,6 +28,12 @@ function GlobalNav({ route }) {
         {items.map((it) => (
           <a key={it.id} href={it.href} className={route === it.id ? 'active' : ''}>{it.label}</a>
         ))}
+        <a
+          href="#"
+          onClick={(e) => { e.preventDefault(); window.Clerk && window.Clerk.signOut(); }}
+        >
+          Sign out
+        </a>
       </nav>
     </header>
   );

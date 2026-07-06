@@ -9,7 +9,7 @@ import {
 import type { Store } from '../state/store.js';
 import type { CalendarEvent, EventKind } from '../agent/schema.js';
 import type { StateStore } from '../state/store.js';
-import { upsertEvent } from '../sync/calendar.js';
+import { writeEvent } from '../sync/calendar.js';
 import { parseIcal, type IcalEvent } from '../sources/icalParser.js';
 import { mergeSubject, mergeEvent } from './dedup.js';
 import { planDedup } from './dedupAgent.js';
@@ -64,7 +64,8 @@ const COURSE_CODE_RE = /^([A-Z]{2,4})\s*(\d{2,3}[A-Z]?)$/;
 const COURSYS_UID_RE = /^\d{4}(?:sp|su|fa)([a-z]{2,4})(\d{2,3}[wu]?)(?:[a-z]\d+)?-/i;
 
 export interface IcalSyncOptions {
-  googleAuth: OAuth2Client;
+  /** null = user has no Google Calendar connected; local rows only. */
+  googleAuth: OAuth2Client | null;
   store: StateStore;
   userId?: number;
   baseFolder?: string;
@@ -297,7 +298,7 @@ export async function syncIcalSubscription(
 
     const calEvent = toCalendarEvent(ev, displayCode);
     try {
-      const r = await upsertEvent(
+      const r = await writeEvent(
         opts.googleAuth,
         subject.id,
         calEvent,
@@ -305,7 +306,7 @@ export async function syncIcalSubscription(
         'ical:coursys',
         opts.userId,
       );
-      if (r.action === 'inserted') {
+      if (r.action === 'inserted' || r.action === 'local') {
         result.eventsInserted++;
         logger.info(
           { subjectId: subject.id, itemId: calEvent.itemId, eventId: r.eventId, kind: calEvent.kind },
@@ -421,8 +422,8 @@ export async function runFullIcalSync(
           intoId: m.intoId,
           store: opts.store,
           userId: opts.userId,
-          googleAuth: opts.googleAuth,
-          deleteGoogleEvents: true,
+          googleAuth: opts.googleAuth ?? undefined,
+          deleteGoogleEvents: opts.googleAuth !== null,
         });
         subjectMerges++;
         googleDeleted += r.googleEventsDeleted;
@@ -586,7 +587,6 @@ async function autoCreateSubject(
     name: code,
     professor: 'TBD',
     destinationFolder: `${base}/${code}`,
-    sources: [],
   };
   if (section) subject.section = section;
   if (term) subject.term = term;
@@ -622,7 +622,6 @@ async function autoCreateHolidaysSubject(
     term: '',
     color: '#c97a17',
     destinationFolder: `${base}/Holidays`,
-    sources: [],
   };
   try {
     await createSubject(store, subject, userId);

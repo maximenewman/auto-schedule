@@ -5,6 +5,7 @@ import type { OAuth2Client } from 'google-auth-library';
 import { loadSubjects, type Subject } from '../config/subjectsStore.js';
 import type { CalendarItemRow, StateStore } from '../state/store.js';
 import { listGoogleEvents } from '../sync/calendarRead.js';
+import { listLocalEvents } from '../sync/localRead.js';
 import { logger } from '../logger.js';
 
 const DEFAULT_MODEL = process.env.AGENT_MODEL ?? 'openai/gpt-4o-mini';
@@ -122,7 +123,8 @@ Only emit a merge when you are confident the two rows describe the same real-wor
 
 export interface DedupCtx {
   store: StateStore;
-  googleAuth: OAuth2Client;
+  /** null = user has no Google Calendar connected; plan from local rows. */
+  googleAuth: OAuth2Client | null;
   userId?: number;
 }
 
@@ -559,6 +561,9 @@ async function fetchEventsForDedup(ctx: DedupCtx): Promise<CalendarItemRow[]> {
   // +/-90 days covers one full term comfortably and keeps the prompt bounded.
   const fromISO = new Date(now - 90 * 24 * 60 * 60 * 1000).toISOString();
   const toISO = new Date(now + 90 * 24 * 60 * 60 * 1000).toISOString();
+  if (!ctx.googleAuth) {
+    return await listLocalEvents(ctx.store, { fromISO, toISO, userId: ctx.userId });
+  }
   return await listGoogleEvents(ctx.googleAuth, ctx.store, { fromISO, toISO, userId: ctx.userId });
 }
 

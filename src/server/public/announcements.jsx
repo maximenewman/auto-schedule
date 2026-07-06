@@ -253,7 +253,7 @@ function AnnouncementsPage({ subjectId }) {
       <div className="announcements-page">
         <div className="ann-hero">
           <div>
-            <h1>CourSys announcements</h1>
+            <h1>Announcements</h1>
             <div className="sub">
               {items.length} entries pulled from the configured Atom feed.
             </div>
@@ -316,7 +316,7 @@ function AnnouncementsPage({ subjectId }) {
                       {a.link && (
                         <>
                           {' · '}
-                          <a href={a.link} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>open on CourSys</a>
+                          <a href={a.link} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>open original</a>
                         </>
                       )}
                     </div>

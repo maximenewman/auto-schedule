@@ -13,7 +13,7 @@ For internals, read `docs/auto-schedule-architecture.md`.
 - `googleapis`  -  Gmail + Calendar
 - `ai` + `@ai-sdk/openai`  -  LLM call (Vercel AI SDK, OpenAI provider pointed at OpenRouter)
 - `zod`  -  schema + structured-output validation
-- `better-sqlite3`  -  state store
+- `postgres`  -  state store (Neon Postgres)
 - `pino` + `pino-pretty`  -  multi-target structured logging
 - `dotenv`  -  config
 

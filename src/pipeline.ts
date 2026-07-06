@@ -1,43 +1,67 @@
 import type { OAuth2Client } from 'google-auth-library';
-import type { Source, Subject } from './config/subjects.js';
 import type { StateStore } from './state/store.js';
-import { FetcherRegistry } from './sources/factory.js';
-import { extractEvents } from './agent/extractor.js';
-import { upsertEvent } from './sync/calendar.js';
-import { logger } from './logger.js';
-import { CourSysAuthError } from './auth/coursys.js';
 import { runFullIcalSync, ICAL_URL_SETTING } from './import/icalSync.js';
+import { syncAtomSubscription, ATOM_URL_SETTING } from './import/atomSync.js';
+import { syncCanvas } from './import/canvasSync.js';
+import { extractPendingAnnouncements } from './import/announcementExtract.js';
+import { logger } from './logger.js';
 
 export interface RunContext {
-  googleAuth: OAuth2Client;
+  /** null = user has no Google Calendar connected; local rows only. */
+  googleAuth: OAuth2Client | null;
   store: StateStore;
   userId?: number;
 }
 
 export interface RunSummary {
-  subjectsProcessed: number;
-  sourcesProcessed: number;
-  itemsProcessed: number;
-  eventsUpserted: number;
+  canvasEventsWritten: number;
+  icalEventsUpserted: number;
+  announcementsFetched: number;
+  announcementsExtracted: number;
+  eventsFromAnnouncements: number;
   failures: number;
 }
 
-export async function runPipeline(
-  subjects: Subject[],
-  ctx: RunContext,
-): Promise<RunSummary> {
+/**
+ * Full ingestion for one user, in dependency order:
+ *   1. Canvas (primary): courses -> subjects, announcements, structured events
+ *   2. CourSys iCal feed (secondary): lectures/labs/deadlines
+ *   3. CourSys Atom feed (secondary): announcements
+ *   4. LLM pass over pending announcements -> events
+ * Each stage is fail-soft: an error is counted and logged, and the run moves
+ * on to the next stage.
+ */
+export async function runPipeline(ctx: RunContext): Promise<RunSummary> {
   const summary: RunSummary = {
-    subjectsProcessed: 0,
-    sourcesProcessed: 0,
-    itemsProcessed: 0,
-    eventsUpserted: 0,
+    canvasEventsWritten: 0,
+    icalEventsUpserted: 0,
+    announcementsFetched: 0,
+    announcementsExtracted: 0,
+    eventsFromAnnouncements: 0,
     failures: 0,
   };
-  const registry = new FetcherRegistry(ctx);
 
-  // iCal subscription is the default ingestion path  -  if a global CourSys
-  // iCal URL is saved, sync it first so any auto-created subjects exist
-  // before the per-subject email/site loop runs.
+  // 1. Canvas — primary source. Missing token just means the stage is skipped.
+  const canvasToken = await ctx.store.getCanvasToken(ctx.userId);
+  if (canvasToken) {
+    try {
+      const r = await syncCanvas({
+        store: ctx.store,
+        userId: ctx.userId,
+        googleAuth: ctx.googleAuth,
+      });
+      summary.canvasEventsWritten = r.eventsWritten;
+      summary.announcementsFetched += r.announcementsFetched;
+      summary.failures += r.eventFailures + r.fileFailures;
+    } catch (err) {
+      summary.failures++;
+      logger.error({ err, userId: ctx.userId }, 'pipeline: canvas sync failed');
+    }
+  } else {
+    logger.info({ userId: ctx.userId }, 'pipeline: no canvas token — skipping');
+  }
+
+  // 2. CourSys iCal subscription.
   const icalUrl = await ctx.store.getSetting(ICAL_URL_SETTING, ctx.userId);
   if (icalUrl) {
     try {
@@ -46,123 +70,48 @@ export async function runPipeline(
         store: ctx.store,
         userId: ctx.userId,
       });
-      summary.eventsUpserted += r.eventsInserted + r.eventsUpdated;
-      summary.itemsProcessed += r.fetched;
+      summary.icalEventsUpserted = r.eventsInserted + r.eventsUpdated;
       summary.failures += r.failures;
     } catch (err) {
       summary.failures++;
-      logger.error({ err }, 'ical: sync failed  -  continuing with per-subject sources');
+      logger.error({ err, userId: ctx.userId }, 'pipeline: ical sync failed');
     }
   } else {
-    logger.info('ical: no URL configured  -  skipping');
+    logger.info({ userId: ctx.userId }, 'pipeline: no iCal URL — skipping');
   }
 
-  try {
-    for (const subject of subjects) {
-      summary.subjectsProcessed++;
-      const subjectLog = logger.child({ subjectId: subject.id });
-      subjectLog.info(
-        { name: subject.name, sources: subject.sources.length },
-        `-> subject ${subject.name}`,
-      );
-      for (const source of subject.sources) {
-        summary.sourcesProcessed++;
-        const label = describeSource(source);
-        subjectLog.info({ source: label }, `  -> source ${label}`);
-        try {
-          const events = await processSource(subject, source, registry, ctx);
-          summary.itemsProcessed += events.items;
-          summary.eventsUpserted += events.upserted;
-          subjectLog.info(
-            { source: label, items: events.items, upserted: events.upserted },
-            `    + source done`,
-          );
-        } catch (err) {
-          summary.failures++;
-          if (err instanceof CourSysAuthError) {
-            subjectLog.error(
-              { err: err.message, source: label },
-              'coursys auth failed  -  bailing out',
-            );
-            throw err;
-          }
-          subjectLog.error({ err, source: label }, '    x source failed');
-        }
-      }
+  // 3. CourSys Atom news feed.
+  const atomUrl = await ctx.store.getSetting(ATOM_URL_SETTING, ctx.userId);
+  if (atomUrl) {
+    try {
+      const r = await syncAtomSubscription(atomUrl, {
+        store: ctx.store,
+        userId: ctx.userId,
+      });
+      summary.announcementsFetched += r.fetched;
+    } catch (err) {
+      summary.failures++;
+      logger.error({ err, userId: ctx.userId }, 'pipeline: atom sync failed');
     }
-  } finally {
-    await registry.close();
+  } else {
+    logger.info({ userId: ctx.userId }, 'pipeline: no Atom URL — skipping');
+  }
+
+  // 4. LLM extraction over whatever announcements are now pending.
+  try {
+    const r = await extractPendingAnnouncements({
+      store: ctx.store,
+      userId: ctx.userId,
+      googleAuth: ctx.googleAuth,
+    });
+    summary.announcementsExtracted = r.extracted;
+    summary.eventsFromAnnouncements = r.eventsWritten;
+    summary.failures += r.failures;
+  } catch (err) {
+    summary.failures++;
+    logger.error({ err, userId: ctx.userId }, 'pipeline: announcement extraction failed');
   }
 
   logger.info(summary, 'pipeline finished');
   return summary;
-}
-
-async function processSource(
-  subject: Subject,
-  source: Source,
-  registry: FetcherRegistry,
-  ctx: RunContext,
-): Promise<{ items: number; upserted: number }> {
-  const fetcher = registry.get(source);
-  const items = await fetcher.fetchNew(subject, source);
-  if (items.length === 0) {
-    logger.info(
-      { subjectId: subject.id, source: describeSource(source) },
-      '    (no new items  -  skipping agent)',
-    );
-  }
-  let upserted = 0;
-
-  for (const item of items) {
-    const log = logger.child({
-      subjectId: subject.id,
-      sourceType: source.type,
-      sourceItemId: item.sourceItemId,
-    });
-
-    log.info(
-      { contentChars: item.content.length, attachments: item.attachments.length },
-      '      -> asking agent to extract events',
-    );
-    const extracted = await extractEvents(subject, source, item.content, {
-      store: ctx.store,
-      userId: ctx.userId,
-    });
-    if (!extracted) {
-      log.warn('      x agent returned no object; skipping item (raw output logged)');
-      continue;
-    }
-    log.info({ events: extracted.events.length }, '      <- agent emitted events');
-
-    for (const event of extracted.events) {
-      try {
-        await upsertEvent(
-          ctx.googleAuth,
-          subject.id,
-          event,
-          ctx.store,
-          describeSource(source),
-          ctx.userId,
-        );
-        upserted++;
-      } catch (err) {
-        log.error({ err, itemId: event.itemId }, 'calendar upsert failed');
-      }
-    }
-
-    // Attachments used to be downloaded to subject.destinationFolder here.
-    // Phase D removed that path; attachment URLs travel with the calendar
-    // event (in the description) so the user can click through from Google
-    // Calendar instead.
-
-    // Mark processed AFTER calendar upserts so a failure mid-loop re-runs cleanly.
-    await fetcher.markProcessed(subject, source, item);
-  }
-
-  return { items: items.length, upserted };
-}
-
-function describeSource(source: Source): string {
-  return source.type === 'email' ? `email:${source.label}` : `site:${source.url}`;
 }

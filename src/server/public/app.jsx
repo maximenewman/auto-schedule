@@ -72,12 +72,54 @@ function LoadingState({ error }) {
   );
 }
 
+function SignInGate() {
+  const ref = React.useRef(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (el) window.Clerk.mountSignIn(el);
+    return () => { if (el) window.Clerk.unmountSignIn(el); };
+  }, []);
+  return (
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div>
+        <div style={{ textAlign: 'center', fontFamily: 'system-ui, sans-serif', fontWeight: 600, fontSize: 22, marginBottom: 16 }}>
+          auto-schedule
+        </div>
+        <div ref={ref} />
+      </div>
+    </div>
+  );
+}
+
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(<LoadingState />);
 
-window.bootData()
-  .then(() => root.render(<App />))
+// Boot order: wait for Clerk, gate on sign-in, then load data. Re-runs on
+// every auth change so sign-out drops straight back to the gate.
+let lastSignedIn = null;
+function renderForAuth(clerk) {
+  const signedIn = !!clerk.user;
+  if (signedIn === lastSignedIn) return;
+  lastSignedIn = signedIn;
+  if (!signedIn) {
+    root.render(<SignInGate />);
+    return;
+  }
+  root.render(<LoadingState />);
+  window.bootData()
+    .then(() => root.render(<App />))
+    .catch((err) => {
+      console.error('boot failed', err);
+      root.render(<LoadingState error={err} />);
+    });
+}
+
+window.authReady
+  .then((clerk) => {
+    renderForAuth(clerk);
+    clerk.addListener(() => renderForAuth(clerk));
+  })
   .catch((err) => {
-    console.error('boot failed', err);
+    console.error('clerk load failed', err);
     root.render(<LoadingState error={err} />);
   });

@@ -71,7 +71,12 @@ export async function runMigrations(sql: Sql): Promise<void> {
     logger.info({ file }, 'pg: applying migration');
     await sql.begin(async (tx) => {
       await tx.unsafe(body);
-      await tx`INSERT INTO schema_migrations (filename) VALUES (${file})`;
+      // ON CONFLICT: two processes booting at once can both reach this point
+      // for the same file. Bodies are idempotent, so losing the race is fine.
+      await tx`
+        INSERT INTO schema_migrations (filename) VALUES (${file})
+        ON CONFLICT (filename) DO NOTHING
+      `;
     });
   }
 }

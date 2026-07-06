@@ -1,7 +1,3 @@
-export type Source =
-  | { type: 'email'; label: string }
-  | { type: 'site'; url: string };
-
 export interface Subject {
   id: string;
   /** Short course code, e.g. "CMPT 307". Shown as the primary label in the UI. */
@@ -23,7 +19,6 @@ export interface Subject {
    */
   color?: string;
   destinationFolder: string;
-  sources: Source[];
 }
 
 export const SUBJECT_PALETTE = [
@@ -42,4 +37,3 @@ export function colorForSubject(subject: Subject): string {
   }
   return SUBJECT_PALETTE[h % SUBJECT_PALETTE.length]!;
 }
-

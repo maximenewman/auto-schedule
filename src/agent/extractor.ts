@@ -9,7 +9,7 @@ import { createOpenAI, type OpenAIProvider } from '@ai-sdk/openai';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { z } from 'zod';
-import type { Source, Subject } from '../config/subjects.js';
+import type { Subject } from '../config/subjects.js';
 import { CalendarEventListSchema, type CalendarEventList } from './schema.js';
 import { SYSTEM_PROMPT } from './prompt.js';
 import { sanitizeEventId } from '../sync/calendar.js';
@@ -43,9 +43,15 @@ export interface ExtractContext {
   userId?: number;
 }
 
+/** Where the text came from — shown to the model and used to name error dumps. */
+export interface SourceDescriptor {
+  type: string;
+  label: string;
+}
+
 export async function extractEvents(
   subject: Subject,
-  source: Source,
+  source: SourceDescriptor,
   content: string,
   ctx: ExtractContext = {},
 ): Promise<CalendarEventList | null> {
@@ -158,15 +164,14 @@ function describeError(err: unknown): Record<string, unknown> {
 
 function logRawFailure(
   subject: Subject,
-  source: Source,
+  source: SourceDescriptor,
   content: string,
   err: unknown,
   raw: string | undefined,
 ): void {
   mkdirSync(ERROR_DIR, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const slug = source.type === 'email' ? source.label : source.url;
-  const safeSlug = slug.replace(/[^a-z0-9-]/gi, '_').slice(0, 80);
+  const safeSlug = source.label.replace(/[^a-z0-9-]/gi, '_').slice(0, 80);
   const file = resolve(
     ERROR_DIR,
     `${stamp}__${subject.id}__${safeSlug}.json`,

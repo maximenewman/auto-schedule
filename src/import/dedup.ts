@@ -96,7 +96,8 @@ export interface MergeEventOptions {
   redundantEventIds: string[];
   store: StateStore;
   userId?: number;
-  googleAuth: OAuth2Client;
+  /** null = user has no Google Calendar connected; local merge only. */
+  googleAuth: OAuth2Client | null;
 }
 
 export interface MergeEventResult {
@@ -117,7 +118,7 @@ export interface MergeEventResult {
  */
 export async function mergeEvent(opts: MergeEventOptions): Promise<MergeEventResult> {
   const { canonicalEventId, redundantEventIds, store, googleAuth, userId } = opts;
-  const calendar = google.calendar({ version: 'v3', auth: googleAuth });
+  const calendar = googleAuth ? google.calendar({ version: 'v3', auth: googleAuth }) : null;
   const result: MergeEventResult = {
     canonicalEventId,
     googleEventsDeleted: 0,
@@ -136,18 +137,20 @@ export async function mergeEvent(opts: MergeEventOptions): Promise<MergeEventRes
       result.redirectsRecorded++;
     }
 
-    try {
-      await calendar.events.delete({ calendarId: CALENDAR_ID, eventId: redundant });
-      result.googleEventsDeleted++;
-    } catch (err) {
-      const status =
-        (err as { code?: number; status?: number }).code ??
-        (err as { status?: number }).status;
-      if (status === 404 || status === 410) {
+    if (calendar) {
+      try {
+        await calendar.events.delete({ calendarId: CALENDAR_ID, eventId: redundant });
         result.googleEventsDeleted++;
-      } else {
-        result.googleDeleteFailures++;
-        logger.warn({ err, eventId: redundant }, 'dedup: failed to delete google event');
+      } catch (err) {
+        const status =
+          (err as { code?: number; status?: number }).code ??
+          (err as { status?: number }).status;
+        if (status === 404 || status === 410) {
+          result.googleEventsDeleted++;
+        } else {
+          result.googleDeleteFailures++;
+          logger.warn({ err, eventId: redundant }, 'dedup: failed to delete google event');
+        }
       }
     }
 

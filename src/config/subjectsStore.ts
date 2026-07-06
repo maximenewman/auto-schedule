@@ -3,15 +3,9 @@ import { logger } from '../logger.js';
 import {
   SUBJECT_PALETTE,
   colorForSubject,
-  type Source,
   type Subject,
 } from './subjects.js';
 import { DEFAULT_USER_ID, type Store } from '../state/store.js';
-
-const SourceSchema = z.union([
-  z.object({ type: z.literal('email'), label: z.string().min(1) }),
-  z.object({ type: z.literal('site'), url: z.string().url() }),
-]);
 
 export const SubjectSchema = z.object({
   id: z.string().min(1).regex(/^[a-z0-9_-]+$/i, 'id may only contain letters, digits, _ or -'),
@@ -29,7 +23,6 @@ export const SubjectSchema = z.object({
     .regex(/^#[0-9a-fA-F]{6}$/, 'color must be a #rrggbb hex string')
     .optional(),
   destinationFolder: z.string().min(1),
-  sources: z.array(SourceSchema).default([]),
 });
 
 export async function loadSubjects(
@@ -98,4 +91,4 @@ export class ValidationError extends Error {
 }
 
 export { SUBJECT_PALETTE, colorForSubject };
-export type { Subject, Source };
+export type { Subject };

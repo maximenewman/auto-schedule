@@ -6,7 +6,7 @@ import {
   type Subject,
 } from '../config/subjectsStore.js';
 import type { CalendarEvent } from '../agent/schema.js';
-import { upsertEvent } from '../sync/calendar.js';
+import { writeEvent } from '../sync/calendar.js';
 import type { StateStore } from '../state/store.js';
 import { logger } from '../logger.js';
 import type {
@@ -213,13 +213,13 @@ function mergeSubject(existing: Subject, next: Subject): Subject {
     term: existing.term ?? next.term,
     color: existing.color ?? next.color,
     destinationFolder: existing.destinationFolder || next.destinationFolder,
-    sources: existing.sources,
   };
 }
 
 export interface BootstrapOptions {
   baseFolder: string;
-  googleAuth: OAuth2Client;
+  /** null = user has no Google Calendar connected; local rows only. */
+  googleAuth: OAuth2Client | null;
   store: StateStore;
   userId?: number;
   sourceLabel?: string;
@@ -260,7 +260,6 @@ export async function bootstrapFromSchedule(
       professor: primaryInstructor(course),
       term,
       destinationFolder: destinationFolderFor(opts.baseFolder, course),
-      sources: [],
     };
     if (lecSection) next.section = lecSection;
 
@@ -283,7 +282,7 @@ export async function bootstrapFromSchedule(
       for (const meeting of section.meetings) {
         const event = buildEvent(course, section, meeting);
         try {
-          const r = await upsertEvent(
+          const r = await writeEvent(
             opts.googleAuth,
             subjectId,
             event,
@@ -291,7 +290,7 @@ export async function bootstrapFromSchedule(
             sourceLabel,
             opts.userId,
           );
-          if (r.action === 'inserted') result.eventsInserted++;
+          if (r.action === 'inserted' || r.action === 'local') result.eventsInserted++;
           else if (r.action === 'updated') result.eventsUpdated++;
           else result.eventsUnchanged++;
         } catch (err) {

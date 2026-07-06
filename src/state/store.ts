@@ -1,15 +1,9 @@
 import type { Sql } from 'postgres';
 import { createConnection, runMigrations } from './db.js';
 import type { CalendarEvent, EventKind } from '../agent/schema.js';
-import type { Source, Subject } from '../config/subjects.js';
+import type { Subject } from '../config/subjects.js';
 
 export const DEFAULT_USER_ID = 1;
-
-export interface SeenEmailRow {
-  subjectId: string;
-  messageId: string;
-  processedAt: string;
-}
 
 export interface CalendarItemRow {
   eventId: string;
@@ -116,112 +110,75 @@ export class Store {
     await this.sql.end({ timeout: 5 });
   }
 
-  // ---- email tracking ---------------------------------------------------
+  // ---- Canvas token ------------------------------------------------------
 
-  async hasSeenEmail(
-    subjectId: string,
-    messageId: string,
-    userId: number = DEFAULT_USER_ID,
-  ): Promise<boolean> {
-    const rows = await this.sql<{ exists: boolean }[]>`
-      SELECT EXISTS (
-        SELECT 1 FROM seen_emails
-         WHERE user_id = ${userId}
-           AND subject_id = ${subjectId}
-           AND message_id = ${messageId}
-      ) AS "exists"
-    `;
-    return rows[0]?.exists === true;
-  }
-
-  async markEmailSeen(
-    subjectId: string,
-    messageId: string,
-    userId: number = DEFAULT_USER_ID,
-  ): Promise<void> {
-    await this.sql`
-      INSERT INTO seen_emails (user_id, subject_id, message_id, processed_at)
-      VALUES (${userId}, ${subjectId}, ${messageId}, now())
-      ON CONFLICT (user_id, subject_id, message_id)
-      DO UPDATE SET processed_at = EXCLUDED.processed_at
-    `;
-  }
-
-  // ---- site hash tracking -----------------------------------------------
-
-  async getSiteHash(
-    subjectId: string,
-    sourceUrl: string,
-    userId: number = DEFAULT_USER_ID,
-  ): Promise<string | undefined> {
-    const rows = await this.sql<{ contentHash: string }[]>`
-      SELECT content_hash AS "contentHash"
-        FROM site_hashes
-       WHERE user_id = ${userId}
-         AND subject_id = ${subjectId}
-         AND source_url = ${sourceUrl}
-    `;
-    return rows[0]?.contentHash;
-  }
-
-  async setSiteHash(
-    subjectId: string,
-    sourceUrl: string,
-    contentHash: string,
-    userId: number = DEFAULT_USER_ID,
-  ): Promise<void> {
-    await this.sql`
-      INSERT INTO site_hashes (user_id, subject_id, source_url, content_hash, fetched_at)
-      VALUES (${userId}, ${subjectId}, ${sourceUrl}, ${contentHash}, now())
-      ON CONFLICT (user_id, subject_id, source_url)
-      DO UPDATE SET content_hash = EXCLUDED.content_hash, fetched_at = EXCLUDED.fetched_at
-    `;
-  }
-
-  // ---- CourSys cookies -------------------------------------------------
-
-  async saveCourSysCookies(
+  async saveCanvasToken(
     userId: number,
-    cookies: unknown[],
+    token: string,
+    baseUrl?: string,
   ): Promise<void> {
-    // The sql.json typing is strict (JSONValue tree). Cookie payloads come
-    // from an external source — cast through unknown rather than fight the
-    // recursive type.
-    const payload = cookies as unknown as Parameters<typeof this.sql.json>[0];
     await this.sql`
       UPDATE users SET
-        coursys_cookies = ${this.sql.json(payload)},
-        coursys_cookies_updated_at = now(),
+        canvas_token = ${token},
+        canvas_token_updated_at = now(),
+        canvas_base_url = COALESCE(${baseUrl ?? null}, canvas_base_url),
         updated_at = now()
       WHERE id = ${userId}
     `;
   }
 
-  async getCourSysCookies(userId: number): Promise<{
-    cookies: unknown[];
-    updatedAt: Date | null;
-  } | null> {
+  async getCanvasToken(
+    userId: number = DEFAULT_USER_ID,
+  ): Promise<{ token: string; baseUrl: string; updatedAt: Date | null } | null> {
     const rows = await this.sql<
-      Array<{ cookies: unknown; updatedAt: Date | null }>
+      Array<{ token: string | null; baseUrl: string; updatedAt: Date | null }>
     >`
       SELECT
-        coursys_cookies            AS "cookies",
-        coursys_cookies_updated_at AS "updatedAt"
+        canvas_token            AS "token",
+        canvas_base_url         AS "baseUrl",
+        canvas_token_updated_at AS "updatedAt"
       FROM users WHERE id = ${userId}
     `;
     const row = rows[0];
-    if (!row || !Array.isArray(row.cookies)) return null;
-    return { cookies: row.cookies, updatedAt: row.updatedAt };
+    if (!row || !row.token) return null;
+    return { token: row.token, baseUrl: row.baseUrl, updatedAt: row.updatedAt };
   }
 
-  async clearCourSysCookies(userId: number): Promise<void> {
+  async clearCanvasToken(userId: number): Promise<void> {
     await this.sql`
       UPDATE users SET
-        coursys_cookies = NULL,
-        coursys_cookies_updated_at = NULL,
+        canvas_token = NULL,
+        canvas_token_updated_at = NULL,
         updated_at = now()
       WHERE id = ${userId}
     `;
+  }
+
+  // ---- subject <-> Canvas course link ------------------------------------
+
+  async setSubjectCanvasCourseId(
+    subjectId: string,
+    canvasCourseId: number,
+    userId: number = DEFAULT_USER_ID,
+  ): Promise<void> {
+    await this.sql`
+      UPDATE subjects SET canvas_course_id = ${canvasCourseId}, updated_at = now()
+      WHERE user_id = ${userId} AND id = ${subjectId}
+    `;
+  }
+
+  async getSubjectByCanvasCourseId(
+    canvasCourseId: number,
+    userId: number = DEFAULT_USER_ID,
+  ): Promise<Subject | undefined> {
+    const rows = await this.sql<SubjectDbRow[]>`
+      SELECT
+        id, code, name, professor, room, section, term, color,
+        destination_folder AS "destinationFolder", sources
+      FROM subjects
+      WHERE user_id = ${userId} AND canvas_course_id = ${canvasCourseId}
+    `;
+    return rows[0] ? rowToSubject(rows[0]) : undefined;
   }
 
   // ---- synced events ----------------------------------------------------
@@ -459,6 +416,20 @@ export class Store {
     `;
   }
 
+  /**
+   * Reverse lookup for one-shot handshake tokens (Google OAuth state): find
+   * which user a (key, value) pair belongs to and consume it atomically so
+   * the same state can't be replayed.
+   */
+  async consumeSettingByValue(key: string, value: string): Promise<number | null> {
+    const rows = await this.sql<{ userId: number }[]>`
+      DELETE FROM user_settings
+       WHERE key = ${key} AND value = ${value}
+      RETURNING user_id AS "userId"
+    `;
+    return rows[0]?.userId ?? null;
+  }
+
   // ---- announcements (CourSys Atom feed) -------------------------------
 
   async upsertAnnouncement(
@@ -540,6 +511,44 @@ export class Store {
     }));
   }
 
+  /** Announcements the LLM pass hasn't processed yet. */
+  async listPendingAnnouncements(
+    limit = 25,
+    userId: number = DEFAULT_USER_ID,
+  ): Promise<AnnouncementRow[]> {
+    const rows = await this.sql<AnnouncementDbRow[]>`
+      SELECT
+        entry_id      AS "entryId",
+        subject_id    AS "subjectId",
+        course_code   AS "courseCode",
+        title         AS "title",
+        content_html  AS "contentHtml",
+        link          AS "link",
+        author        AS "author",
+        published_at  AS "publishedAt",
+        updated_at    AS "updatedAt",
+        extract_status AS "extractStatus",
+        fetched_at    AS "fetchedAt"
+      FROM announcements
+      WHERE user_id = ${userId} AND extract_status = 'pending'
+      ORDER BY published_at ASC NULLS FIRST
+      LIMIT ${Math.max(1, Math.min(limit, 200))}
+    `;
+    return rows.map((r) => ({
+      entryId: r.entryId,
+      subjectId: r.subjectId,
+      courseCode: r.courseCode,
+      title: r.title,
+      contentHtml: r.contentHtml,
+      link: r.link,
+      author: r.author,
+      publishedAt: toIsoOrNull(r.publishedAt),
+      updatedAt: toIsoOrNull(r.updatedAt),
+      extractStatus: r.extractStatus,
+      fetchedAt: toIso(r.fetchedAt),
+    }));
+  }
+
   async setAnnouncementExtractStatus(
     entryId: string,
     status: 'pending' | 'extracted' | 'skipped',
@@ -605,8 +614,7 @@ export class Store {
         section,
         term,
         color,
-        destination_folder AS "destinationFolder",
-        sources
+        destination_folder AS "destinationFolder"
       FROM subjects
       WHERE user_id = ${userId}
       ORDER BY name ASC
@@ -628,8 +636,7 @@ export class Store {
         section,
         term,
         color,
-        destination_folder AS "destinationFolder",
-        sources
+        destination_folder AS "destinationFolder"
       FROM subjects
       WHERE user_id = ${userId} AND id = ${id}
     `;
@@ -641,6 +648,8 @@ export class Store {
     userId: number = DEFAULT_USER_ID,
   ): Promise<{ ok: true } | { ok: false; reason: 'duplicate' }> {
     try {
+      // `sources` column survives until the cleanup migration drops it;
+      // write an empty array to satisfy any NOT NULL constraint.
       await this.sql`
         INSERT INTO subjects (
           user_id, id, code, name, professor, room, section, term, color,
@@ -650,7 +659,7 @@ export class Store {
           ${subject.professor}, ${subject.room ?? null},
           ${subject.section ?? null}, ${subject.term ?? null},
           ${subject.color ?? null}, ${subject.destinationFolder},
-          ${this.sql.json(subject.sources)}, now(), now()
+          ${this.sql.json([])}, now(), now()
         )
       `;
       return { ok: true };
@@ -675,7 +684,6 @@ export class Store {
         term = ${subject.term ?? null},
         color = ${subject.color ?? null},
         destination_folder = ${subject.destinationFolder},
-        sources = ${this.sql.json(subject.sources)},
         updated_at = now()
       WHERE user_id = ${userId} AND id = ${subject.id}
     `;
@@ -694,24 +702,50 @@ export class Store {
 
   // ---- users -----------------------------------------------------------
 
-  async findOrCreateUserByGoogleSub(input: {
-    sub: string;
+  /**
+   * Resolve a Clerk identity to a local user row. Resolution order:
+   *  1. existing row already stamped with this Clerk id;
+   *  2. legacy row with the same email but no Clerk id yet — claim it, so
+   *     data created before the Clerk cutover stays attached;
+   *  3. fresh insert.
+   */
+  async findOrCreateUserByClerkId(input: {
+    clerkUserId: string;
     email: string;
     displayName: string | null;
   }): Promise<UserRow> {
+    const bySub = await this.sql<UserRow[]>`
+      SELECT
+        id, email, display_name AS "displayName",
+        clerk_user_id AS "clerkUserId", created_at AS "createdAt"
+      FROM users WHERE clerk_user_id = ${input.clerkUserId}
+    `;
+    if (bySub[0]) return bySub[0];
+
+    const claimed = await this.sql<UserRow[]>`
+      UPDATE users SET
+        clerk_user_id = ${input.clerkUserId},
+        display_name = COALESCE(users.display_name, ${input.displayName}),
+        updated_at = now()
+      WHERE email = ${input.email} AND clerk_user_id IS NULL
+      RETURNING
+        id, email, display_name AS "displayName",
+        clerk_user_id AS "clerkUserId", created_at AS "createdAt"
+    `;
+    if (claimed[0]) return claimed[0];
+
     const rows = await this.sql<UserRow[]>`
-      INSERT INTO users (email, display_name, google_sub, created_at, updated_at)
-      VALUES (${input.email}, ${input.displayName}, ${input.sub}, now(), now())
-      ON CONFLICT (google_sub) DO UPDATE SET
-        email = EXCLUDED.email,
-        display_name = COALESCE(EXCLUDED.display_name, users.display_name),
+      INSERT INTO users (email, display_name, clerk_user_id, created_at, updated_at)
+      VALUES (${input.email}, ${input.displayName}, ${input.clerkUserId}, now(), now())
+      ON CONFLICT (email) DO UPDATE SET
+        clerk_user_id = COALESCE(users.clerk_user_id, EXCLUDED.clerk_user_id),
         updated_at = now()
       RETURNING
-        id, email, display_name AS "displayName", google_sub AS "googleSub",
-        created_at AS "createdAt"
+        id, email, display_name AS "displayName",
+        clerk_user_id AS "clerkUserId", created_at AS "createdAt"
     `;
     if (rows.length === 0) {
-      throw new Error('findOrCreateUserByGoogleSub: insert returned no rows');
+      throw new Error('findOrCreateUserByClerkId: insert returned no rows');
     }
     return rows[0]!;
   }
@@ -719,11 +753,21 @@ export class Store {
   async getUserById(userId: number): Promise<UserRow | null> {
     const rows = await this.sql<UserRow[]>`
       SELECT
-        id, email, display_name AS "displayName", google_sub AS "googleSub",
-        created_at AS "createdAt"
+        id, email, display_name AS "displayName",
+        clerk_user_id AS "clerkUserId", created_at AS "createdAt"
       FROM users WHERE id = ${userId}
     `;
     return rows[0] ?? null;
+  }
+
+  /** Every registered user — the multi-user worker loop iterates this. */
+  async listUsers(): Promise<UserRow[]> {
+    return this.sql<UserRow[]>`
+      SELECT
+        id, email, display_name AS "displayName",
+        clerk_user_id AS "clerkUserId", created_at AS "createdAt"
+      FROM users ORDER BY id ASC
+    `;
   }
 
   async saveGoogleTokens(
@@ -761,33 +805,17 @@ export class Store {
     return rows[0] ?? null;
   }
 
-  // ---- sessions --------------------------------------------------------
-
-  async createSession(
-    sessionId: string,
-    userId: number,
-    expiresAt: Date,
-  ): Promise<void> {
+  async clearGoogleTokens(userId: number): Promise<void> {
     await this.sql`
-      INSERT INTO sessions (id, user_id, expires_at)
-      VALUES (${sessionId}, ${userId}, ${expiresAt})
+      UPDATE users SET
+        google_refresh_token = NULL,
+        google_access_token = NULL,
+        google_access_token_expires = NULL,
+        google_scope = NULL,
+        google_token_obtained_at = NULL,
+        updated_at = now()
+      WHERE id = ${userId}
     `;
-  }
-
-  async getActiveSession(sessionId: string): Promise<SessionRow | null> {
-    const rows = await this.sql<SessionRow[]>`
-      SELECT id, user_id AS "userId", expires_at AS "expiresAt"
-        FROM sessions
-       WHERE id = ${sessionId} AND expires_at > now()
-    `;
-    if (rows.length === 0) return null;
-    // Bump last_seen so we can prune stale sessions later.
-    await this.sql`UPDATE sessions SET last_seen_at = now() WHERE id = ${sessionId}`;
-    return rows[0]!;
-  }
-
-  async destroySession(sessionId: string): Promise<void> {
-    await this.sql`DELETE FROM sessions WHERE id = ${sessionId}`;
   }
 
   // ---- agent error counter (file-system backed; routes layer overrides) -
@@ -801,7 +829,7 @@ export interface UserRow {
   id: number;
   email: string;
   displayName: string | null;
-  googleSub: string | null;
+  clerkUserId: string | null;
   createdAt: string | Date;
 }
 
@@ -810,12 +838,6 @@ export interface GoogleTokenRow {
   accessToken: string | null;
   accessTokenExpires: Date | null;
   scope: string | null;
-}
-
-export interface SessionRow {
-  id: string;
-  userId: number;
-  expiresAt: Date;
 }
 
 interface SubjectDbRow {
@@ -828,19 +850,14 @@ interface SubjectDbRow {
   term: string | null;
   color: string | null;
   destinationFolder: string;
-  sources: unknown;
 }
 
 function rowToSubject(row: SubjectDbRow): Subject {
-  const sources = Array.isArray(row.sources)
-    ? (row.sources.filter(isValidSource) as Source[])
-    : [];
   const out: Subject = {
     id: row.id,
     name: row.name,
     professor: row.professor,
     destinationFolder: row.destinationFolder,
-    sources,
   };
   if (row.code !== null) out.code = row.code;
   if (row.room !== null) out.room = row.room;
@@ -848,14 +865,6 @@ function rowToSubject(row: SubjectDbRow): Subject {
   if (row.term !== null) out.term = row.term;
   if (row.color !== null) out.color = row.color;
   return out;
-}
-
-function isValidSource(value: unknown): value is Source {
-  if (!value || typeof value !== 'object') return false;
-  const v = value as { type?: unknown; label?: unknown; url?: unknown };
-  if (v.type === 'email') return typeof v.label === 'string';
-  if (v.type === 'site') return typeof v.url === 'string';
-  return false;
 }
 
 function isUniqueViolation(err: unknown): boolean {

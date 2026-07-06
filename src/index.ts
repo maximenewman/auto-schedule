@@ -3,12 +3,10 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { logger } from './logger.js';
 import { DEFAULT_USER_ID, Store } from './state/store.js';
-import { loadSubjects } from './config/subjectsStore.js';
-import { getAuthorizedClient } from './auth/google.js';
-import { CourSysAuthError } from './auth/coursys.js';
+import { getAuthorizedClient, GoogleAuthMissing } from './auth/google.js';
+import type { OAuth2Client } from 'google-auth-library';
 import { upsertEvent } from './sync/calendar.js';
 import { runPipeline } from './pipeline.js';
-import { notifyAuthFailure } from './notify/notifier.js';
 import { parseSchedulePdf } from './import/sfuPdf.js';
 import { bootstrapFromSchedule } from './import/bootstrap.js';
 import { runFullIcalSync, ICAL_URL_SETTING } from './import/icalSync.js';
@@ -83,6 +81,22 @@ async function maybeJitter(command: Command): Promise<void> {
   await new Promise((r) => setTimeout(r, ms));
 }
 
+/** Google Calendar is optional — a user without it still syncs locally. */
+async function optionalGoogleAuth(
+  store: Store,
+  userId: number,
+): Promise<OAuth2Client | null> {
+  try {
+    return await getAuthorizedClient(store, userId);
+  } catch (err) {
+    if (err instanceof GoogleAuthMissing) {
+      logger.info({ userId }, 'google not connected — syncing local rows only');
+      return null;
+    }
+    throw err;
+  }
+}
+
 function pickUserId(): number {
   const raw = process.env.AUTO_SCHEDULE_USER_ID;
   if (!raw) return DEFAULT_USER_ID;
@@ -103,17 +117,19 @@ async function main(): Promise<void> {
     case 'run': {
       const store = await Store.create();
       try {
-        const subjects = await loadSubjects(store, userId);
-        const googleAuth = await getAuthorizedClient(store, userId);
-        try {
-          await runPipeline(subjects, { googleAuth, store, userId });
-        } catch (err) {
-          if (err instanceof CourSysAuthError) {
-            await notifyAuthFailure('coursys', googleAuth, err.message);
-            process.exitCode = 2;
-            return;
+        // Single-user when AUTO_SCHEDULE_USER_ID is set (the dashboard's
+        // "Sync now" spawn path); otherwise every registered user in turn —
+        // that's what the cloud scheduler invokes.
+        const userIds = process.env.AUTO_SCHEDULE_USER_ID
+          ? [userId]
+          : (await store.listUsers()).map((u) => u.id);
+        for (const uid of userIds) {
+          try {
+            const googleAuth = await optionalGoogleAuth(store, uid);
+            await runPipeline({ googleAuth, store, userId: uid });
+          } catch (err) {
+            logger.error({ err, userId: uid }, 'run: pipeline failed for user');
           }
-          throw err;
         }
       } finally {
         await store.close();
@@ -129,7 +145,7 @@ async function main(): Promise<void> {
             'no iCal URL configured. Pass as arg or save via the UI (Schedule -> iCal subscription).',
           );
         }
-        const googleAuth = await getAuthorizedClient(store, userId);
+        const googleAuth = await optionalGoogleAuth(store, userId);
         const result = await runFullIcalSync(url, { googleAuth, store, userId });
         logger.info(result, 'sync:ical finished');
       } finally {
@@ -152,7 +168,7 @@ async function main(): Promise<void> {
       );
       const store = await Store.create();
       try {
-        const googleAuth = await getAuthorizedClient(store, userId);
+        const googleAuth = await optionalGoogleAuth(store, userId);
         const result = await bootstrapFromSchedule(schedule, {
           baseFolder: args.baseFolder,
           googleAuth,

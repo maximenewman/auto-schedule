@@ -11,8 +11,8 @@ export interface SyncStatus {
   itemsAddedLastWeek: number;
   agentErrorsLastWeek: number;
   googleAuthOk: boolean;
-  coursysAuthOk: boolean;
-  coursysExpiresInDays: number | null;
+  canvasConfigured: boolean;
+  canvasTokenUpdatedAt: string | null;
 }
 
 /** Count agent-error files whose mtime is within the last 7 days. */
@@ -37,21 +37,14 @@ export async function googleAuthExists(store: Store, userId: number): Promise<bo
   return !!tokens?.refreshToken;
 }
 
-/**
- * CourSys cookies don't carry a hard expiry we can trust (some are session
- * cookies). Use the upload timestamp as a proxy and assume the SFU CAS
- * session lasts roughly 7 days from the last refresh.
- */
-export async function coursysCookieAge(
+export async function canvasTokenStatus(
   store: Store,
   userId: number,
-): Promise<{ ok: boolean; expiresInDays: number | null }> {
-  const row = await store.getCourSysCookies(userId);
-  if (!row || row.cookies.length === 0) {
-    return { ok: false, expiresInDays: null };
-  }
-  if (!row.updatedAt) return { ok: true, expiresInDays: null };
-  const ageDays = (Date.now() - row.updatedAt.getTime()) / (24 * 60 * 60 * 1000);
-  const remaining = Math.max(0, Math.round(7 - ageDays));
-  return { ok: remaining > 0, expiresInDays: remaining };
+): Promise<{ configured: boolean; updatedAt: string | null }> {
+  const row = await store.getCanvasToken(userId);
+  if (!row) return { configured: false, updatedAt: null };
+  return {
+    configured: true,
+    updatedAt: row.updatedAt ? row.updatedAt.toISOString() : null,
+  };
 }

@@ -3,13 +3,12 @@ import type { OAuth2Client, Credentials } from 'google-auth-library';
 import type { Store } from '../state/store.js';
 import { logger } from '../logger.js';
 
-export const SCOPES = [
-  'openid',
-  'email',
-  'profile',
-  'https://www.googleapis.com/auth/gmail.readonly',
-  'https://www.googleapis.com/auth/calendar',
-];
+// Events-only Calendar scope. Sign-in identity comes from Clerk and Gmail
+// ingestion was replaced by the Canvas API, so Google is purely the optional
+// "Connect Google Calendar" integration — and the app only ever reads/writes
+// events (list/get/insert/patch/delete), never calendars or sharing, so the
+// narrower calendar.events scope is sufficient.
+export const SCOPES = ['https://www.googleapis.com/auth/calendar.events'];
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -103,34 +102,13 @@ export function buildGoogleAuthUrl(state: string): string {
   });
 }
 
-export interface GoogleProfile {
-  sub: string;
-  email: string;
-  name: string | null;
-}
-
-export async function exchangeCodeForTokens(
-  code: string,
-): Promise<{ credentials: Credentials; profile: GoogleProfile }> {
+/**
+ * Exchange the OAuth code for tokens. No profile lookup — the calendar-only
+ * scope returns no id_token, and the user this connect belongs to is carried
+ * in the signed OAuth state cookie instead.
+ */
+export async function exchangeCodeForTokens(code: string): Promise<Credentials> {
   const client = buildOAuthClient();
   const { tokens } = await client.getToken(code);
-  if (!tokens.id_token) {
-    throw new Error('google did not return an id_token — required for profile lookup');
-  }
-  const ticket = await client.verifyIdToken({
-    idToken: tokens.id_token,
-    audience: requireEnv('GOOGLE_OAUTH_CLIENT_ID'),
-  });
-  const payload = ticket.getPayload();
-  if (!payload?.sub || !payload.email) {
-    throw new Error('google id_token missing sub/email claims');
-  }
-  return {
-    credentials: tokens,
-    profile: {
-      sub: payload.sub,
-      email: payload.email,
-      name: payload.name ?? null,
-    },
-  };
+  return tokens;
 }

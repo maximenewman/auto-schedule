@@ -3,26 +3,83 @@ const { useState, useCallback, useMemo } = React;
 
 const COLOR_OPTIONS = ['#0066cc', '#1f8a5b', '#c97a17', '#7d4cdb', '#0f8a8a', '#d04a5b'];
 
+async function connectGoogle() {
+  const res = await fetch('/api/google/start-url');
+  if (!res.ok) {
+    alert('Could not start the Google connect flow (HTTP ' + res.status + ').');
+    return;
+  }
+  const { url } = await res.json();
+  window.location.assign(url);
+}
+
+async function disconnectGoogle() {
+  await fetch('/api/google/disconnect', { method: 'POST' });
+  await window.refreshData();
+  window.location.reload();
+}
+
+async function setCanvasToken() {
+  const token = window.prompt(
+    'Paste your Canvas access token.\n(Canvas -> Account -> Settings -> New access token)',
+  );
+  if (!token || !token.trim()) return;
+  const res = await fetch('/api/canvas/token', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ token: token.trim() }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    alert(body.error || 'Canvas rejected the token.');
+    return;
+  }
+  alert(`Canvas connected as ${body.canvasUser}. Importing courses now...`);
+  await importFromCanvas();
+}
+
+async function importFromCanvas() {
+  const res = await fetch('/api/import/canvas', { method: 'POST' });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    alert(body.error || 'Canvas import failed to start.');
+    return;
+  }
+  // NDJSON stream — drain it so we only reload once the run is done.
+  try { await res.text(); } catch { /* stream interrupted */ }
+  window.location.reload();
+}
+
 function statusPills() {
   const s = window.SYNC_STATUS;
-  const googleLabel = s.googleAuthOk ? 'Google OK' : 'Google re-auth needed';
-  let coursysLabel;
-  if (!s.coursysAuthOk) coursysLabel = 'CourSys expired';
-  else if (s.coursysExpiresInDays != null) coursysLabel = `CourSys  -  expires in ${s.coursysExpiresInDays}d`;
-  else coursysLabel = 'CourSys OK';
   return (
     <div style={{ display: 'flex', gap: 10 }}>
-      <div className="sync-pill">
-        <span className={"dot" + (s.googleAuthOk ? '' : ' warn')}></span>
-        {googleLabel}
-      </div>
-      <div className="sync-pill">
-        <span className={"dot" + (
-          s.coursysAuthOk && (s.coursysExpiresInDays == null || s.coursysExpiresInDays > 2)
-            ? '' : ' warn'
-        )}></span>
-        {coursysLabel}
-      </div>
+      {s.canvasConfigured ? (
+        <div className="sync-pill" title="Click to sync courses, announcements, and events from Canvas"
+             style={{ cursor: 'pointer' }} onClick={importFromCanvas}>
+          <span className="dot"></span>
+          Canvas connected  -  sync now
+        </div>
+      ) : (
+        <div className="sync-pill" title="Paste a Canvas access token to auto-import your courses"
+             style={{ cursor: 'pointer' }} onClick={setCanvasToken}>
+          <span className="dot warn"></span>
+          Add Canvas token
+        </div>
+      )}
+      {s.googleAuthOk ? (
+        <div className="sync-pill" title="Events sync to your Google Calendar. Click to disconnect."
+             style={{ cursor: 'pointer' }} onClick={disconnectGoogle}>
+          <span className="dot"></span>
+          Google Calendar connected
+        </div>
+      ) : (
+        <div className="sync-pill" title="Optional: mirror your schedule into Google Calendar"
+             style={{ cursor: 'pointer' }} onClick={connectGoogle}>
+          <span className="dot"></span>
+          Connect Google Calendar
+        </div>
+      )}
     </div>
   );
 }
@@ -38,24 +95,15 @@ function emptySubject() {
     term: '',
     color: COLOR_OPTIONS[0],
     destinationFolder: '',
-    sources: [{ type: 'email', label: '' }],
   };
 }
 
 function normalizeSubjectForApi(s) {
-  const cleanSources = s.sources
-    .map((src) => {
-      if (src.type === 'email') return { type: 'email', label: (src.label || '').trim() };
-      return { type: 'site', url: (src.url || '').trim() };
-    })
-    .filter((src) => (src.type === 'email' ? src.label : src.url));
-
   const out = {
     id: s.id.trim(),
     name: s.name.trim(),
     professor: (s.professor || '').trim(),
     destinationFolder: s.destinationFolder.trim(),
-    sources: cleanSources,
   };
   if (s.code && s.code.trim()) out.code = s.code.trim();
   if (s.room && s.room.trim()) out.room = s.room.trim();
@@ -74,19 +122,6 @@ function SubjectForm({ initial, mode, onCancel, onSaved }) {
   const isEdit = mode === 'edit';
 
   const update = (patch) => setForm((f) => ({ ...f, ...patch }));
-  const updateSource = (i, patch) => setForm((f) => {
-    const next = [...f.sources];
-    next[i] = { ...next[i], ...patch };
-    return { ...f, sources: next };
-  });
-  const addSource = (type) => setForm((f) => ({
-    ...f,
-    sources: [...f.sources, type === 'email' ? { type: 'email', label: '' } : { type: 'site', url: '' }],
-  }));
-  const removeSource = (i) => setForm((f) => ({
-    ...f,
-    sources: f.sources.filter((_, j) => j !== i),
-  }));
 
   const submit = async (e) => {
     e.preventDefault();
@@ -221,43 +256,6 @@ function SubjectForm({ initial, mode, onCancel, onSaved }) {
               />
             </label>
           </div>
-
-          <fieldset className="sources-fieldset">
-            <legend>Sources</legend>
-            {form.sources.map((src, i) => (
-              <div key={i} className="source-edit">
-                <select
-                  value={src.type}
-                  onChange={(e) => {
-                    const t = e.target.value;
-                    updateSource(i, t === 'email' ? { type: 'email', label: '' } : { type: 'site', url: '' });
-                  }}>
-                  <option value="email">email</option>
-                  <option value="site">site</option>
-                </select>
-                {src.type === 'email' ? (
-                  <input
-                    type="text"
-                    placeholder="Gmail label"
-                    value={src.label || ''}
-                    onChange={(e) => updateSource(i, { label: e.target.value })}
-                  />
-                ) : (
-                  <input
-                    type="url"
-                    placeholder="https://coursys.sfu.ca/.../pages/"
-                    value={src.url || ''}
-                    onChange={(e) => updateSource(i, { url: e.target.value })}
-                  />
-                )}
-                <button type="button" className="btn-icon" onClick={() => removeSource(i)} aria-label="Remove source">-</button>
-              </div>
-            ))}
-            <div className="source-add">
-              <button type="button" className="btn-ghost-pill" onClick={() => addSource('email')}>+ Email source</button>
-              <button type="button" className="btn-ghost-pill" onClick={() => addSource('site')}>+ Site source</button>
-            </div>
-          </fieldset>
 
           {error && <div className="form-error">{error}</div>}
           <footer>
@@ -494,7 +492,6 @@ function SubjectsPage({ now }) {
                 <div className="stats">
                   <div className="stat"><div className="n">{upcomingDeadlines}</div><div className="l">Due</div></div>
                   <div className="stat"><div className="n">{files}</div><div className="l">Files</div></div>
-                  <div className="stat"><div className="n">{s.sources.length}</div><div className="l">Sources</div></div>
                 </div>
               </a>
             );
@@ -509,7 +506,7 @@ function SubjectsPage({ now }) {
             }}>
             <div style={{ fontSize: 32, color: 'var(--ink-muted-32)', marginBottom: 4 }}>+</div>
             <div style={{ fontSize: 15, fontWeight: 500, color: 'var(--ink-muted-80)' }}>Add subject</div>
-            <div style={{ fontSize: 12, color: 'var(--ink-muted-48)', marginTop: 4 }}>Writes to data/subjects.json</div>
+            <div style={{ fontSize: 12, color: 'var(--ink-muted-48)', marginTop: 4 }}>Most subjects appear automatically from Canvas / CourSys</div>
           </button>
         </div>
       </div>
@@ -675,20 +672,6 @@ function SubjectDetail({ id, now }) {
 
           <div>
             <div className="sd-section" style={{ marginTop: 0 }}>
-              <h2 style={{ fontSize: 21 }}>Sources</h2>
-              <div className="sources-card">
-                {s.sources.map((src, i) => (
-                  <div key={i} className="source-row">
-                    <div className={"badge " + src.type}>{src.type}</div>
-                    <div className={"value " + (src.type === 'site' ? 'mono' : '')}>
-                      {src.type === 'email' ? `Label: ${src.label}` : src.url}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="sd-section">
               <h2 style={{ fontSize: 21 }}>Exams</h2>
               <div className="sec-sub">Midterms and finals for this subject.</div>
               <ExamsBlock subjectId={s.id} now={now} />

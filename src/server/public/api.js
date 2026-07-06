@@ -14,8 +14,8 @@ window.SYNC_STATUS = {
   itemsAddedLastWeek: 0,
   agentErrorsLastWeek: 0,
   googleAuthOk: false,
-  coursysAuthOk: false,
-  coursysExpiresInDays: null,
+  canvasConfigured: false,
+  canvasTokenUpdatedAt: null,
   running: null,
 };
 
