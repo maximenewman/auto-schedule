@@ -270,6 +270,83 @@ function SubjectForm({ initial, mode, onCancel, onSaved }) {
   );
 }
 
+const PREVIEWABLE_IMAGE = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg']);
+
+// In-app file viewer: previews PDFs/images inline through a short-lived
+// storage URL; everything else gets a download-only card. The Download
+// button always fetches a fresh attachment-disposition URL.
+function FileViewer({ file, onClose }) {
+  const [url, setUrl] = React.useState(null);
+  const [error, setError] = React.useState(null);
+
+  React.useEffect(() => {
+    let alive = true;
+    window.api.fileUrl(file.id, 'inline').then((res) => {
+      if (!alive) return;
+      if (res && res.url) setUrl(res.url);
+      else setError((res && res.error) || 'Could not load the file.');
+    });
+    return () => { alive = false; };
+  }, [file.id]);
+
+  React.useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const ext = (file.filename.split('.').pop() || '').toLowerCase();
+  const isPdf = ext === 'pdf';
+  const isImage = PREVIEWABLE_IMAGE.has(ext);
+
+  let body;
+  if (error) {
+    body = <div style={{ padding: 24, color: 'var(--ink-muted-48)' }}>{error}</div>;
+  } else if (!url) {
+    body = <div style={{ padding: 24, color: 'var(--ink-muted-48)' }}>Loading preview...</div>;
+  } else if (isPdf) {
+    body = <iframe title={file.filename} src={url} style={{ border: 0, width: '100%', height: '100%' }} />;
+  } else if (isImage) {
+    body = (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', overflow: 'auto' }}>
+        <img src={url} alt={file.filename} style={{ maxWidth: '100%', maxHeight: '100%' }} />
+      </div>
+    );
+  } else {
+    body = (
+      <div style={{ padding: 32, textAlign: 'center', color: 'var(--ink-muted-80)' }}>
+        <div style={{ fontSize: 40, marginBottom: 8 }}>{(ext || 'file').toUpperCase()}</div>
+        <div>No inline preview for this file type.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        className="modal"
+        onClick={(e) => e.stopPropagation()}
+        style={{ width: 'min(980px, 94vw)', height: '86vh', display: 'flex', flexDirection: 'column' }}
+      >
+        <header style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <h2 style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {file.filename}
+          </h2>
+          <button
+            type="button"
+            className="btn-ghost-pill"
+            onClick={() => window.downloadStoredFile(file.id, file.filename)}
+          >
+            Download
+          </button>
+          <button type="button" className="close" onClick={onClose} aria-label="Close">x</button>
+        </header>
+        <div style={{ flex: 1, minHeight: 0 }}>{body}</div>
+      </div>
+    </div>
+  );
+}
+
 // Synthetic buckets the iCal sync creates that shouldn't appear as a
 // regular subject card (events tagged with this id still render in the
 // schedule view  -  Util.subjectById still finds them in window.SUBJECTS).
@@ -560,6 +637,7 @@ function ExamsBlock({ subjectId, now }) {
 
 function SubjectDetail({ id, now }) {
   const [editing, setEditing] = useState(false);
+  const [viewingFile, setViewingFile] = useState(null);
   const s = Util.subjectById(id);
 
   const handleDelete = useCallback(async () => {
@@ -661,8 +739,8 @@ function SubjectDetail({ id, now }) {
                     key={f.id ?? f.filename}
                     className="file-row"
                     style={{ cursor: 'pointer' }}
-                    title="Open / download"
-                    onClick={() => window.openStoredFile(f.id)}
+                    title="View / download"
+                    onClick={() => setViewingFile(f)}
                   >
                     <span className="file-icon">{(f.filename.split('.').pop() || 'FILE').toUpperCase().slice(0, 4)}</span>
                     <div className="name">
@@ -696,6 +774,10 @@ function SubjectDetail({ id, now }) {
           onCancel={() => setEditing(false)}
           onSaved={() => setEditing(false)}
         />
+      )}
+
+      {viewingFile && (
+        <FileViewer file={viewingFile} onClose={() => setViewingFile(null)} />
       )}
     </div>
   );

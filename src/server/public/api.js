@@ -55,7 +55,8 @@ const api = {
     return fetchJson(`/api/subjects/${id}/events${q ? '?' + q : ''}`, undefined, []);
   },
   files:       (id)    => fetchJson(`/api/subjects/${encodeURIComponent(id)}/files`, undefined, []),
-  fileUrl:     (id)    => fetchJson(`/api/files/${encodeURIComponent(id)}/url`),
+  fileUrl:     (id, disposition) =>
+    fetchJson(`/api/files/${encodeURIComponent(id)}/url?disposition=${disposition || 'inline'}`),
   status:      ()      => fetchJson('/api/status', undefined, window.SYNC_STATUS),
   sync:        ()      => fetchJson('/api/sync', { method: 'POST' }, { started: false }),
 };
@@ -95,11 +96,19 @@ function hydrateFile(row) {
   };
 }
 
-/** Open a stored file in a new tab via a short-lived presigned URL. */
-window.openStoredFile = async function openStoredFile(fileId) {
-  const res = await api.fileUrl(fileId);
-  if (res && res.url) window.open(res.url, '_blank', 'noopener');
-  else alert('Could not get a download link — is object storage configured?');
+/** Trigger a browser download of a stored file via a short-lived URL. */
+window.downloadStoredFile = async function downloadStoredFile(fileId, filename) {
+  const res = await api.fileUrl(fileId, 'attachment');
+  if (!res || !res.url) {
+    alert('Could not get a download link — is object storage configured?');
+    return;
+  }
+  const a = document.createElement('a');
+  a.href = res.url;
+  a.download = filename || '';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
 };
 
 function toArray(x) { return Array.isArray(x) ? x : []; }

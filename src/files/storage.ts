@@ -54,11 +54,27 @@ export async function putObjectStream(
   await upload.done();
 }
 
-/** Short-lived download URL — safe to hand to the browser. */
-export async function presignGetUrl(key: string, expiresInSeconds = 300): Promise<string> {
-  return getSignedUrl(
-    getClient(),
-    new GetObjectCommand({ Bucket: bucket(), Key: key }),
-    { expiresIn: expiresInSeconds },
-  );
+/**
+ * Short-lived URL — safe to hand to the browser. `disposition: 'inline'`
+ * lets the in-app viewer embed the file; `'attachment'` forces a download
+ * with the original filename.
+ */
+export async function presignGetUrl(
+  key: string,
+  expiresInSeconds = 300,
+  opts: { disposition?: 'inline' | 'attachment'; filename?: string } = {},
+): Promise<string> {
+  const command = new GetObjectCommand({
+    Bucket: bucket(),
+    Key: key,
+    ResponseContentDisposition: opts.disposition
+      ? `${opts.disposition}${opts.filename ? `; filename="${sanitizeFilename(opts.filename)}"` : ''}`
+      : undefined,
+  });
+  return getSignedUrl(getClient(), command, { expiresIn: expiresInSeconds });
+}
+
+function sanitizeFilename(name: string): string {
+  // Keep the header parseable: strip quotes/control chars.
+  return name.replace(/["\\\r\n]/g, '_');
 }

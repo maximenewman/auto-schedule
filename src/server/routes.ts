@@ -363,15 +363,21 @@ export function registerRoutes(app: FastifyInstance, ctx: RouteCtx): void {
   app.get('/api/files/:id/url', async (req, reply) => {
     const userId = req.userId!;
     const { id } = req.params as { id: string };
+    const q = req.query as { disposition?: string };
     const canvasFileId = Number(id);
     if (!Number.isInteger(canvasFileId)) {
       return reply.code(400).send({ error: 'bad file id' });
     }
+    // Ownership check: the record lookup is scoped to the requesting user.
     const row = await ctx.store.getFileRecord(canvasFileId, userId);
     if (!row) return reply.code(404).send({ error: 'not found' });
+    const disposition = q.disposition === 'attachment' ? 'attachment' : 'inline';
     try {
-      const url = await presignGetUrl(row.objectKey, 300);
-      return { url, filename: row.filename };
+      const url = await presignGetUrl(row.objectKey, 300, {
+        disposition,
+        filename: row.filename,
+      });
+      return { url, filename: row.filename, contentType: row.contentType };
     } catch (err) {
       logger.error({ err }, 'files: presign failed');
       return reply.code(503).send({ error: 'object storage not configured' });
