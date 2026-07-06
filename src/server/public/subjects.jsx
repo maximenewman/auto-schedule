@@ -280,6 +280,91 @@ function groupFilesBySource(files) {
   return groups;
 }
 
+// Accordion over the module groups so a term's worth of files doesn't turn
+// the page into an endless scroll. First group starts open; the rest are a
+// header + count until clicked.
+function FilesBlock({ files, onView }) {
+  const groups = groupFilesBySource(files);
+  const [open, setOpen] = React.useState(() => new Set(groups.length ? [groups[0].label] : []));
+  const toggle = (label) => setOpen((prev) => {
+    const next = new Set(prev);
+    if (next.has(label)) next.delete(label);
+    else next.add(label);
+    return next;
+  });
+  const allOpen = groups.every((g) => open.has(g.label));
+
+  if (files.length === 0) {
+    return (
+      <div className="files-list">
+        <div style={{ padding: '14px 18px', color: 'var(--ink-muted-48)', fontSize: 14 }}>
+          No files synced yet. Click "Sync files" above.
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <div style={{ textAlign: 'right', margin: '6px 0' }}>
+        <button
+          type="button"
+          className="btn-ghost-pill"
+          style={{ fontSize: 12 }}
+          onClick={() => setOpen(allOpen ? new Set() : new Set(groups.map((g) => g.label)))}
+        >
+          {allOpen ? 'Collapse all' : 'Expand all'}
+        </button>
+      </div>
+      {groups.map((group) => {
+        const expanded = open.has(group.label);
+        return (
+          <div key={group.label} style={{ marginBottom: 8 }}>
+            <button
+              type="button"
+              onClick={() => toggle(group.label)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+                padding: '9px 12px', cursor: 'pointer', textAlign: 'left',
+                background: 'var(--parchment, rgba(0,0,0,0.03))',
+                border: '1px solid var(--hairline)', borderRadius: 8,
+                font: 'inherit', fontSize: 13, fontWeight: 600, color: 'var(--ink-muted-80)',
+              }}
+            >
+              <span style={{ fontSize: 11, width: 12 }}>{expanded ? 'v' : '>'}</span>
+              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {group.label}
+              </span>
+              <span style={{ fontWeight: 400, color: 'var(--ink-muted-48)', fontSize: 12 }}>
+                {group.items.length} file{group.items.length === 1 ? '' : 's'}
+              </span>
+            </button>
+            {expanded && (
+              <div className="files-list" style={{ marginTop: 4 }}>
+                {group.items.map((f) => (
+                  <div
+                    key={f.id ?? f.filename}
+                    className="file-row"
+                    style={{ cursor: 'pointer' }}
+                    title="View / download"
+                    onClick={() => onView(f)}
+                  >
+                    <span className="file-icon">{(f.filename.split('.').pop() || 'FILE').toUpperCase().slice(0, 4)}</span>
+                    <div className="name">
+                      {f.filename}
+                      <div className="meta">Updated {f.addedISO ? new Date(f.addedISO).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ' - '}</div>
+                    </div>
+                    <div className="size">{f.size}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // In-app file viewer: previews PDFs/images inline through a short-lived
 // storage URL; everything else gets a download-only card. The Download
 // button always fetches a fresh attachment-disposition URL.
@@ -824,9 +909,17 @@ function SubjectDetail({ id, now }) {
           </div>
         </div>
 
-        <div className="sd-grid">
+        <div className="sd-grid sd-grid-3">
+          <div className="sd-col-announcements">
+            <div className="sd-section" style={{ marginTop: 0 }}>
+              <h2 style={{ fontSize: 21 }}>Announcements</h2>
+              <div className="sec-sub">Latest posts from Canvas and CourSys for this subject.</div>
+              <AnnouncementsBlock subjectId={s.id} />
+            </div>
+          </div>
+
           <div>
-            <div className="sd-section">
+            <div className="sd-section" style={{ marginTop: 0 }}>
               <h2>Upcoming</h2>
               <div className="sec-sub">Lectures, tutorials, and deadlines extracted from this subject's sources.</div>
               <div className="assignment-list">
@@ -863,43 +956,8 @@ function SubjectDetail({ id, now }) {
                   {syncingFiles ? 'Syncing...' : 'Sync files'}
                 </button>
               </div>
-              <div className="sec-sub">Mirrored from Canvas into cloud storage, grouped by the module / page they came from  -  click to view or download.</div>
-              {files.length === 0 && (
-                <div className="files-list">
-                  <div style={{ padding: '14px 18px', color: 'var(--ink-muted-48)', fontSize: 14 }}>No files synced yet. Click "Sync files" above.</div>
-                </div>
-              )}
-              {groupFilesBySource(files).map((group) => (
-                <div key={group.label} style={{ marginBottom: 14 }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.02em', textTransform: 'uppercase', color: 'var(--ink-muted-48)', margin: '12px 2px 6px' }}>
-                    {group.label}
-                  </div>
-                  <div className="files-list">
-                    {group.items.map((f) => (
-                      <div
-                        key={f.id ?? f.filename}
-                        className="file-row"
-                        style={{ cursor: 'pointer' }}
-                        title="View / download"
-                        onClick={() => setViewingFile(f)}
-                      >
-                        <span className="file-icon">{(f.filename.split('.').pop() || 'FILE').toUpperCase().slice(0, 4)}</span>
-                        <div className="name">
-                          {f.filename}
-                          <div className="meta">Updated {f.addedISO ? new Date(f.addedISO).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ' - '}</div>
-                        </div>
-                        <div className="size">{f.size}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="sd-section">
-              <h2>Announcements</h2>
-              <div className="sec-sub">Latest posts from Canvas and CourSys for this subject.</div>
-              <AnnouncementsBlock subjectId={s.id} />
+              <div className="sec-sub">Mirrored from Canvas into cloud storage  -  one section per module / page, click a section to expand.</div>
+              <FilesBlock files={files} onView={setViewingFile} />
             </div>
           </div>
 
